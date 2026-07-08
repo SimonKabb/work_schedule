@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+{% load scheduler_tags %}
+<h2>График за {{ month }}.{{ year }}</h2>
+
+<table class="table table-bordered table-sm">
+
+    <thead>
+        <tr>
+            <th>Сотрудник</th>
+
+            {% for day in days %}
+                <th>{{ day }}</th>
+            {% endfor %}
+
+        </tr>
+    </thead>
+
+    <tbody>
+
+    {% for row in rows %}
+
+        <tr>
+
+            <td>
+                {{ row.user.full_name }}
+            </td>
+
+            {% for duty in row.cells %}
+
+                <td>
+
+                    {% if duty %}
+                        {{ duty.shift_type.name }}
+                    {% endif %}
+
+                </td>
+
+            {% endfor %}
+
+        </tr>
+
+    {% endfor %}
+
+    </tbody>
+
+</table>
+
+{% endblock %}
