@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+    <title>Генерация графика</title>
+</head>
+
+
+<body>
+
+<h1>
+    Генерация графика дежурств
+</h1>
+
+
+<p>
+    Месяц:
+    {{ month.year }}
+    -
+    {{ month.month }}
+</p>
+
+
+<form method="post">
+
+    {% csrf_token %}
+
+    <button type="submit">
+        Сгенерировать
+    </button>
+
+</form>
+
+
+</body>
+
+</html>

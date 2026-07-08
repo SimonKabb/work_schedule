@@ -1,11 +1,10 @@
 # scheduler/views.py
 
 import calendar
-
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
-
-from .models import User, Duty
+from .models import User, Duty, ScheduleMonth
+from .services.schedule_generator import ScheduleGenerator
 
 
 def month_schedule(request):
@@ -54,3 +53,30 @@ def month_schedule(request):
     }
 
     return render(request, "work_schedule/month.html", context)
+
+def generate_schedule(request, month_id):
+
+    month = get_object_or_404(
+        ScheduleMonth,
+        id=month_id
+    )
+
+    if request.method == "POST":
+
+        generator = ScheduleGenerator(month)
+
+        generator.generate()
+
+        return redirect(
+            "schedule_month",
+            month_id=month.id
+        )
+
+
+    return render(
+        request,
+        "work_schedule/generate_schedule.html",
+        {
+            "month": month
+        }
+    )

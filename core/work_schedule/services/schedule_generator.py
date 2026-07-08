@@ -41,7 +41,7 @@ class ScheduleGenerator:
                 preference.user_id,
                 preference.date,
             )
-        self.preferences[key] = preference.status
+            self.preferences[key] = preference.status
         
         for user in self.users:
             if user.employee_type == User.EmployeeType.MAIN:
@@ -50,12 +50,11 @@ class ScheduleGenerator:
                 self.schedule_month.main_employee_hours
                 )
             else:
-                workload = (
-                PartTimeWorkload.objects.get(
+                workload = PartTimeWorkload.objects.get(
                     month=self.schedule_month,
                     user=user,
                     ).first()
-                )
+            
                 self.target_hours[user.id] = workload.hours if workload else 0
             self.current_hours[user.id] = 0
 
@@ -102,3 +101,27 @@ class ScheduleGenerator:
 
         return self.users[0]
     
+    def save(self):
+
+        for duty in self.generated_duties:
+            Duty.objects.create(
+                user=duty["user"],
+                date=duty["date"],
+                shift_type=duty["shift_type"],
+            )
+    def assign_employee(
+        self,
+        user,
+        current_date,
+        shift_type
+        ):
+
+        self.generated_duties.append(
+            {
+                "user": user,
+                "date": current_date,
+                "shift_type": shift_type,
+            }
+        )
+
+        self.current_hours[user.id] += shift_type.hours
