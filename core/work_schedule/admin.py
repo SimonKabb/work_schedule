@@ -6,6 +6,7 @@ from .models import (
     Duty,
     DutyDatePreference,
     PartTimeWorkload,
+    ScheduleHoliday,
     ScheduleMonth,
     ShiftType,
     Team,
@@ -225,9 +226,36 @@ class ScheduleMonthAdminForm(forms.ModelForm):
         return ",".join(self.cleaned_data["part_time_allowed_weekdays"])
 
 
+class ScheduleHolidayInline(admin.TabularInline):
+    model = ScheduleHoliday
+    extra = 1
+    fields = ("date",)
+    verbose_name = "Праздничный день (работает как выходной)"
+    verbose_name_plural = "Праздничные дни (используются смены выходного дня)"
+
+    def _can_manage_parent(self, request, obj=None):
+        if request.user.is_superuser:
+            return True
+        teams = manageable_teams(request.user)
+        return teams.filter(pk=obj.team_id).exists() if obj else teams.exists()
+
+    def has_view_permission(self, request, obj=None):
+        return self._can_manage_parent(request, obj)
+
+    def has_add_permission(self, request, obj=None):
+        return self._can_manage_parent(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        return self._can_manage_parent(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        return self._can_manage_parent(request, obj)
+
+
 @admin.register(ScheduleMonth)
 class ScheduleMonthAdmin(TeamScopedAdminMixin, admin.ModelAdmin):
     form = ScheduleMonthAdminForm
+    inlines = (ScheduleHolidayInline,)
     list_display = ("team", "year", "month", "main_employee_hours", "part_time_hours_percent")
     list_filter = ("team", "year")
     ordering = ("team", "-year", "-month")

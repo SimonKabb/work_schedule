@@ -1,6 +1,7 @@
 import uuid
 
 from django.contrib.auth.models import AbstractUser
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
@@ -146,6 +147,39 @@ class ScheduleMonth(models.Model):
     def __str__(self):
         return f"{self.team}: {self.month:02d}.{self.year}"
 
+
+class ScheduleHoliday(models.Model):
+    month = models.ForeignKey(
+        ScheduleMonth,
+        on_delete=models.CASCADE,
+        related_name="holidays",
+        verbose_name="Месяц графика",
+    )
+    date = models.DateField(verbose_name="Праздничная дата")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("month", "date"),
+                name="unique_schedule_holiday_date",
+            )
+        ]
+        ordering = ("date",)
+        verbose_name = "Праздничный день"
+        verbose_name_plural = "Праздничные дни"
+
+    def clean(self):
+        super().clean()
+        if self.date and self.month_id and (
+            self.date.year != self.month.year or self.date.month != self.month.month
+        ):
+            raise ValidationError({
+                "date": "Праздничная дата должна находиться внутри выбранного месяца."
+            })
+
+    def __str__(self):
+        return f"{self.date:%d.%m.%Y} — как выходной"
+
 class DutyDatePreference(models.Model):
     class Status(models.TextChoices):
         AVAILABLE = "AVAILABLE", "Может"
@@ -199,7 +233,51 @@ class PreferenceActivity(models.Model):
                 name="unique_preference_activity_per_month",
             )
         ]
-    
+
+
+class EmployeeAbsence(models.Model):
+    class Type(models.TextChoices):
+        VACATION = "VACATION", "Отпуск"
+        SICK_LEAVE = "SICK", "Больничный"
+        TRAINING = "TRAINING", "Обучение"
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="absences",
+        verbose_name="Сотрудник",
+    )
+    date = models.DateField(verbose_name="Дата")
+    absence_type = models.CharField(
+        max_length=8,
+        choices=Type.choices,
+        default=Type.VACATION,
+        verbose_name="Причина отсутствия",
+    )
+    created_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_absences",
+        verbose_name="Кто добавил",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "date"),
+                name="unique_employee_absence_date",
+            )
+        ]
+        ordering = ("date", "user__full_name")
+        verbose_name = "Отсутствие сотрудника"
+        verbose_name_plural = "Отсутствия сотрудников"
+
+    def __str__(self):
+        return f"{self.user}: {self.get_absence_type_display()} {self.date:%d.%m.%Y}"
 
 class PartTimeWorkload(models.Model):
     # Количество часов, которое совместитель должен отработать в конкретный месяц

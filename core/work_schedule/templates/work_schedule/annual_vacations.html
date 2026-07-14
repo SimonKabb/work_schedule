@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block title %}Отпуска — {{ team.name }}{% endblock %}
+
+{% block extra_head %}
+<style>
+    .vacation-toolbar { max-width: 1100px; }
+    .vacation-month { margin-bottom: 2rem; }
+    .vacation-month h2 { scroll-margin-top: 1rem; }
+    .vacation-month .schedule-table { margin-bottom: 0; }
+    .vacation-month .schedule-table th:not(:first-child),
+    .vacation-month .schedule-table td:not(:first-child) { min-width: 38px; }
+    .vacation-day {
+        width: 100%; min-height: 34px; padding: 2px; border: 0;
+        background: transparent; color: inherit; font: inherit;
+    }
+    button.vacation-day:hover { outline: 2px solid #0d6efd; outline-offset: -2px; }
+    .vacation-day.is-saving { opacity: .45; }
+    .vacation-range { max-width: 760px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="vacation-toolbar mb-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div>
+            <h1 class="h3 mb-1">Отпуска: {{ team.name }}</h1>
+            {% if selected_user %}<div class="text-muted">{{ selected_user.full_name }}</div>{% endif %}
+        </div>
+        <a class="btn btn-outline-secondary" href="{% url 'month_schedule' %}?team={{ team.id }}&year={{ year }}">Вернуться к графику</a>
+    </div>
+
+    <form method="get" class="d-flex flex-wrap align-items-end gap-2 mb-3">
+        {% if can_manage %}
+            <div>
+                <label class="form-label mb-1" for="vacation-user">Сотрудник</label>
+                <select class="form-select" id="vacation-user" name="user">
+                    {% for employee in employees %}
+                        <option value="{{ employee.id }}" {% if employee == selected_user %}selected{% endif %}>{{ employee.full_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        {% endif %}
+        <div>
+            <label class="form-label mb-1" for="vacation-year">Год</label>
+            <select class="form-select" id="vacation-year" name="year">
+                {% for option_year in year_options %}
+                    <option value="{{ option_year }}" {% if option_year == year %}selected{% endif %}>{{ option_year }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button class="btn btn-primary" type="submit">Показать</button>
+    </form>
+
+    <div class="d-flex flex-wrap gap-3 small mb-3">
+        <span><i class="d-inline-block rounded me-1" style="width: 16px; height: 16px; background: #b6d4fe;"></i> Отпуск</span>
+        <span><i class="d-inline-block rounded me-1" style="width: 16px; height: 16px; background: #f1f3f5;"></i> Выходной</span>
+        <span><i class="d-inline-block rounded me-1" style="width: 16px; height: 16px; background: #ffe69c;"></i> Праздник (как выходной)</span>
+    </div>
+
+    {% if can_manage and selected_user %}
+        <form class="card card-body vacation-range mb-3" method="post"
+              action="{% url 'set_vacation' team.id selected_user.id %}">
+            {% csrf_token %}
+            <div class="fw-semibold mb-2">Добавить или очистить диапазон</div>
+            <div class="d-flex flex-wrap align-items-end gap-2">
+                <div>
+                    <label class="form-label mb-1" for="vacation-start">С</label>
+                    <input class="form-control" id="vacation-start" type="date" name="start_date" required>
+                </div>
+                <div>
+                    <label class="form-label mb-1" for="vacation-end">По</label>
+                    <input class="form-control" id="vacation-end" type="date" name="end_date" required>
+                </div>
+                <button class="btn btn-primary" name="action" value="ADD">Добавить отпуск</button>
+                <button class="btn btn-outline-danger" name="action" value="CLEAR">Очистить</button>
+            </div>
+        </form>
+        <div class="text-muted small mb-3">Диапазон применяется к выбранному сотруднику. Отдельный день можно изменить нажатием на нужную ячейку любого сотрудника.</div>
+    {% endif %}
+</div>
+
+{% if employees %}
+<div class="vacation-year-list">
+    {% for month in months %}
+        <section class="vacation-month" id="month-{{ month.number }}">
+            <h2 class="h4 mb-2">{{ month.name }} {{ year }}</h2>
+            <div class="schedule-table-wrap">
+                <table class="table table-bordered table-sm schedule-table">
+                    <thead>
+                        <tr>
+                            <th>Сотрудник</th>
+                            {% for day in month.days %}
+                                <th class="{% if day.is_holiday %}holiday-cell{% elif day.is_weekend %}weekend-cell{% endif %}">{{ day.number }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for row in month.rows %}
+                        <tr>
+                            <td>{{ row.user.full_name }}</td>
+                            {% for cell in row.cells %}
+                                <td class="{% if cell.is_vacation %}vacation-cell{% elif cell.is_holiday %}holiday-cell{% elif cell.is_weekend %}weekend-cell{% endif %}">
+                                    {% if can_manage %}
+                                        <button type="button"
+                                                class="vacation-day"
+                                                data-url="{% url 'set_vacation' team.id row.user.id %}"
+                                                data-date="{{ cell.date|date:'Y-m-d' }}"
+                                                aria-label="{{ row.user.full_name }}, {{ cell.date|date:'j E Y' }}">
+                                            {% if cell.is_vacation %}ОТП{% endif %}
+                                        </button>
+                                    {% elif cell.is_vacation %}
+                                        ОТП
+                                    {% endif %}
+                                </td>
+                            {% endfor %}
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    {% endfor %}
+</div>
+{% else %}
+    <div class="alert alert-warning">В коллективе пока нет сотрудников.</div>
+{% endif %}
+
+{% if can_manage and selected_user %}
+<script>
+    const csrfToken = document.querySelector('.vacation-range input[name="csrfmiddlewaretoken"]').value;
+    document.querySelectorAll('button.vacation-day').forEach((button) => {
+        button.addEventListener('click', async () => {
+            button.classList.add('is-saving');
+            const body = new URLSearchParams({date: button.dataset.date, action: 'TOGGLE'});
+            try {
+                const response = await fetch(button.dataset.url, {
+                    method: 'POST',
+                    headers: {'X-CSRFToken': csrfToken, 'X-Requested-With': 'XMLHttpRequest'},
+                    body,
+                });
+                if (!response.ok) throw new Error('save failed');
+                const result = await response.json();
+                button.closest('td').classList.toggle('vacation-cell', result.is_vacation);
+                button.textContent = result.is_vacation ? 'ОТП' : '';
+            } catch (error) {
+                alert('Не удалось сохранить отпускной день. Обновите страницу и попробуйте снова.');
+            } finally {
+                button.classList.remove('is-saving');
+            }
+        });
+    });
+</script>
+{% endif %}
+{% endblock %}

@@ -20,8 +20,10 @@ from django.utils import timezone
 from .models import (
     Duty,
     DutyDatePreference,
+    EmployeeAbsence,
     PreferenceActivity,
     ScheduleMonth,
+    ScheduleHoliday,
     ShiftType,
     Team,
     TeamMembership,
@@ -123,6 +125,192 @@ def reset_team_invitation(request, team_id):
     return redirect("team_invitation", team_id=team.id)
 
 
+def _team_employees(team):
+    return User.objects.filter(
+        is_active=True,
+        team_memberships__team=team,
+        team_memberships__participates_in_schedule=True,
+    ).distinct().order_by("full_name")
+
+
+@login_required
+def annual_vacations(request, team_id):
+    team = get_object_or_404(
+        accessible_teams(request.user),
+        id=team_id,
+        is_active=True,
+    )
+    employees = _team_employees(team)
+    can_manage = can_manage_team(request.user, team)
+    current_year = timezone.now().date().year
+    try:
+        year = int(request.GET.get("year", current_year))
+        if not 2000 <= year <= 2100:
+            raise ValueError
+    except (TypeError, ValueError):
+        year = current_year
+
+    selected_user = None
+    requested_user_id = request.GET.get("user")
+    if can_manage:
+        if requested_user_id:
+            selected_user = get_object_or_404(employees, id=requested_user_id)
+        else:
+            selected_user = employees.first()
+    elif employees.filter(id=request.user.id).exists():
+        selected_user = request.user
+    else:
+        raise PermissionDenied("Нет доступа к отпускам этого коллектива.")
+
+    employees = list(employees)
+    holiday_dates = set(
+        ScheduleHoliday.objects.filter(
+            month__team=team,
+            month__year=year,
+        ).values_list("date", flat=True)
+    )
+    vacation_dates_by_user = {employee.id: set() for employee in employees}
+    for user_id, absence_date in EmployeeAbsence.objects.filter(
+        user__in=employees,
+        date__year=year,
+        absence_type=EmployeeAbsence.Type.VACATION,
+    ).values_list("user_id", "date"):
+        vacation_dates_by_user[user_id].add(absence_date)
+
+    months = []
+    for month_number, month_name in enumerate(MONTH_NAMES, 1):
+        days = []
+        _, days_in_month = calendar.monthrange(year, month_number)
+        for day_number in range(1, days_in_month + 1):
+            current_date = date(year, month_number, day_number)
+            days.append({
+                "number": day_number,
+                "date": current_date,
+                "is_holiday": current_date in holiday_dates,
+                "is_weekend": current_date.weekday() >= 5 or current_date in holiday_dates,
+            })
+
+        rows = []
+        for employee in employees:
+            rows.append({
+                "user": employee,
+                "cells": [
+                    {
+                        "date": day["date"],
+                        "is_holiday": day["is_holiday"],
+                        "is_weekend": day["is_weekend"],
+                        "is_vacation": day["date"] in vacation_dates_by_user[employee.id],
+                    }
+                    for day in days
+                ],
+            })
+        months.append({
+            "number": month_number,
+            "name": month_name,
+            "days": days,
+            "rows": rows,
+        })
+
+    year_options = list(range(current_year - 2, current_year + 4))
+    if year not in year_options:
+        year_options.append(year)
+        year_options.sort()
+
+    return render(
+        request,
+        "work_schedule/annual_vacations.html",
+        {
+            "team": team,
+            "employees": employees,
+            "selected_user": selected_user,
+            "year": year,
+            "year_options": year_options,
+            "months": months,
+            "can_manage": can_manage,
+        },
+    )
+
+
+@login_required
+def set_vacation(request, team_id, user_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("Нужен POST-запрос.")
+    team = get_object_or_404(Team, id=team_id, is_active=True)
+    if not can_manage_team(request.user, team):
+        raise PermissionDenied("Редактировать отпуска может только заведующий коллектива.")
+    selected_user = get_object_or_404(_team_employees(team), id=user_id)
+
+    try:
+        start_date = date.fromisoformat(
+            request.POST.get("start_date") or request.POST["date"]
+        )
+        end_date = date.fromisoformat(request.POST.get("end_date") or start_date.isoformat())
+    except (KeyError, TypeError, ValueError):
+        return HttpResponseBadRequest("Некорректная дата отпуска.")
+    if end_date < start_date or (end_date - start_date).days > 366:
+        return HttpResponseBadRequest("Некорректный диапазон отпуска.")
+
+    action = request.POST.get("action", "TOGGLE")
+    dates = [
+        start_date + timedelta(days=offset)
+        for offset in range((end_date - start_date).days + 1)
+    ]
+
+    with transaction.atomic():
+        if action == "CLEAR":
+            EmployeeAbsence.objects.filter(
+                user=selected_user,
+                date__range=(start_date, end_date),
+                absence_type=EmployeeAbsence.Type.VACATION,
+            ).delete()
+            is_vacation = False
+        elif action == "ADD":
+            EmployeeAbsence.objects.bulk_create(
+                [
+                    EmployeeAbsence(
+                        user=selected_user,
+                        date=vacation_date,
+                        absence_type=EmployeeAbsence.Type.VACATION,
+                        created_by=request.user,
+                    )
+                    for vacation_date in dates
+                ],
+                ignore_conflicts=True,
+            )
+            is_vacation = True
+        elif action == "TOGGLE" and len(dates) == 1:
+            absence = EmployeeAbsence.objects.filter(
+                user=selected_user,
+                date=start_date,
+                absence_type=EmployeeAbsence.Type.VACATION,
+            ).first()
+            if absence:
+                absence.delete()
+                is_vacation = False
+            else:
+                EmployeeAbsence.objects.create(
+                    user=selected_user,
+                    date=start_date,
+                    absence_type=EmployeeAbsence.Type.VACATION,
+                    created_by=request.user,
+                )
+                is_vacation = True
+        else:
+            return HttpResponseBadRequest("Некорректное действие.")
+
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return JsonResponse({
+            "ok": True,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "is_vacation": is_vacation,
+        })
+    return redirect(
+        f"{reverse('annual_vacations', args=[team.id])}"
+        f"?year={start_date.year}&user={selected_user.id}"
+    )
+
+
 def _selected_period(request):
     today = timezone.now().date()
     period = request.GET.get("period", "")
@@ -152,19 +340,16 @@ def _selected_team(request):
 def _schedule_data(year, month, team):
     days_in_month = calendar.monthrange(year, month)[1]
 
-    users = list(
-        User.objects.filter(
-            is_active=True,
-            team_memberships__team=team,
-            team_memberships__participates_in_schedule=True,
-        ).distinct().order_by("full_name")
-    )
+    users = list(_team_employees(team))
 
     schedule_month = ScheduleMonth.objects.filter(
         team=team,
         year=year,
         month=month,
     ).first()
+    holiday_dates = set()
+    if schedule_month:
+        holiday_dates = set(schedule_month.holidays.values_list("date", flat=True))
 
     duties = (
         Duty.objects.filter(
@@ -181,6 +366,14 @@ def _schedule_data(year, month, team):
         (preference.user_id, preference.date.day): preference.status
         for preference in preferences
     }
+    absences_map = {
+        (absence.user_id, absence.date.day): absence
+        for absence in EmployeeAbsence.objects.filter(
+            user__in=users,
+            date__year=year,
+            date__month=month,
+        )
+    }
 
     # Словарь для быстрого поиска смен
     duties_map = {
@@ -191,7 +384,11 @@ def _schedule_data(year, month, team):
     days = [
         {
             "number": day,
-            "is_weekend": date(year, month, day).weekday() >= 5,
+            "is_holiday": date(year, month, day) in holiday_dates,
+            "is_weekend": (
+                date(year, month, day).weekday() >= 5
+                or date(year, month, day) in holiday_dates
+            ),
         }
         for day in range(1, days_in_month + 1)
     ]
@@ -206,6 +403,8 @@ def _schedule_data(year, month, team):
             cells.append(
                 {
                     "duty": duty,
+                    "absence": absences_map.get((user.id, day)),
+                    "is_holiday": day_info["is_holiday"],
                     "is_weekend": day_info["is_weekend"],
                     "preference_status": preferences_map.get((user.id, day)),
                 }
@@ -263,7 +462,11 @@ def _xlsx_response(rows, days, year, month):
             row["user"].full_name,
             employee_type,
             *[
-                cell["duty"].shift_type.name if cell["duty"] else ""
+                (
+                    cell["absence"].get_absence_type_display()
+                    if cell["absence"]
+                    else cell["duty"].shift_type.name if cell["duty"] else ""
+                )
                 for cell in row["cells"]
             ],
             row["total_hours"],
@@ -367,6 +570,9 @@ def preference_calendar(request, month_id, user_id=None):
             user=selected_user,
         )
     }
+    holiday_dates = set(
+        schedule_month.holidays.values_list("date", flat=True)
+    )
     calendar_weeks = []
     for week in calendar.monthcalendar(schedule_month.year, schedule_month.month):
         cells = []
@@ -381,7 +587,10 @@ def preference_calendar(request, month_id, user_id=None):
                     "day": day,
                     "date": current_date,
                     "status": preferences.get(current_date),
-                    "is_weekend": current_date and current_date.weekday() >= 5,
+                    "is_holiday": current_date in holiday_dates,
+                    "is_weekend": current_date and (
+                        current_date.weekday() >= 5 or current_date in holiday_dates
+                    ),
                 }
             )
         calendar_weeks.append(cells)

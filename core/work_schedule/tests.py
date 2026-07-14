@@ -10,9 +10,11 @@ from django.utils import timezone
 from .models import (
     Duty,
     DutyDatePreference,
+    EmployeeAbsence,
     PartTimeWorkload,
     PreferenceActivity,
     ScheduleMonth,
+    ScheduleHoliday,
     ShiftType,
     Team,
     TeamMembership,
@@ -111,6 +113,28 @@ class ScheduleGeneratorTests(TestCase):
         self.assertFalse(
             Duty.objects.filter(user=self.users[0], date=unavailable_day).exists()
         )
+
+    def test_weekday_holiday_uses_weekend_shift_rules(self):
+        holiday_date = date(2026, 1, 6)
+        ScheduleHoliday.objects.create(
+            month=self.schedule_month,
+            date=holiday_date,
+        )
+
+        ScheduleGenerator(self.schedule_month).generate()
+
+        holiday_duties = Duty.objects.filter(date=holiday_date)
+        self.assertEqual(holiday_duties.count(), 1)
+        self.assertTrue(
+            all(duty.shift_type == self.weekend_shift for duty in holiday_duties)
+        )
+
+        response = self.client.get(
+            reverse("month_schedule"),
+            {"team": self.team.id, "year": 2026, "month": 1},
+        )
+        self.assertContains(response, "Праздник (как выходной)")
+        self.assertContains(response, "holiday-cell")
 
     def test_regeneration_replaces_previous_automatic_schedule(self):
         ScheduleGenerator(self.schedule_month).generate()
@@ -598,6 +622,21 @@ class ScheduleGeneratorTests(TestCase):
         self.assertContains(response, self.team.name)
         self.assertNotContains(response, other_team.name)
 
+    def test_manager_can_configure_holidays_inside_schedule_month(self):
+        manager = self.make_manager("holiday-manager", "Заведующий праздниками")
+        self.client.force_login(manager)
+
+        response = self.client.get(
+            reverse(
+                "admin:work_schedule_schedulemonth_change",
+                args=[self.schedule_month.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Праздничные дни")
+        self.assertContains(response, "holidays-0-date")
+
     def test_employee_registers_only_in_invited_team(self):
         other_team = Team.objects.create(name="Коллектив по приглашению")
         registration_url = reverse(
@@ -675,3 +714,154 @@ class ScheduleGeneratorTests(TestCase):
 
         self.assertEqual(page_response.status_code, 403)
         self.assertEqual(qr_response.status_code, 403)
+
+    def test_manager_can_add_vacation_range_in_annual_calendar(self):
+        manager = self.make_manager("vacation-manager", "Заведующий отпусками")
+        self.client.force_login(manager)
+
+        page_response = self.client.get(
+            reverse("annual_vacations", args=[self.team.id]),
+            {"year": 2026, "user": self.users[0].id},
+        )
+        save_response = self.client.post(
+            reverse("set_vacation", args=[self.team.id, self.users[0].id]),
+            {
+                "start_date": "2026-07-01",
+                "end_date": "2026-07-05",
+                "action": "ADD",
+            },
+        )
+
+        self.assertContains(page_response, "Январь")
+        self.assertContains(page_response, "Декабрь")
+        self.assertContains(page_response, self.users[0].full_name)
+        self.assertRedirects(
+            save_response,
+            f"{reverse('annual_vacations', args=[self.team.id])}"
+            f"?year=2026&user={self.users[0].id}",
+        )
+        absences = EmployeeAbsence.objects.filter(user=self.users[0])
+        self.assertEqual(absences.count(), 5)
+        self.assertTrue(all(absence.created_by == manager for absence in absences))
+
+    def test_employee_can_view_but_cannot_edit_own_vacation(self):
+        page_response = self.client.get(
+            reverse("annual_vacations", args=[self.team.id]),
+            {"year": 2026},
+        )
+        save_response = self.client.post(
+            reverse("set_vacation", args=[self.team.id, self.users[0].id]),
+            {"date": "2026-07-01", "action": "TOGGLE"},
+        )
+
+        self.assertEqual(page_response.status_code, 200)
+        self.assertContains(page_response, self.users[0].full_name)
+        self.assertNotContains(page_response, "Добавить отпуск")
+        self.assertEqual(save_response.status_code, 403)
+        self.assertFalse(EmployeeAbsence.objects.exists())
+
+    def test_annual_calendar_shows_vacations_for_all_employees_in_month_rows(self):
+        manager = self.make_manager("overlap-manager", "Заведующий пересечениями")
+        second_employee = User.objects.create_user(
+            username="second-vacation-employee",
+            password="password",
+            full_name="Второй сотрудник",
+        )
+        TeamMembership.objects.create(
+            team=self.team,
+            user=second_employee,
+            role=TeamMembership.Role.EMPLOYEE,
+        )
+        shared_date = date(2026, 7, 10)
+        EmployeeAbsence.objects.bulk_create([
+            EmployeeAbsence(
+                user=self.users[0],
+                date=shared_date,
+                absence_type=EmployeeAbsence.Type.VACATION,
+            ),
+            EmployeeAbsence(
+                user=second_employee,
+                date=shared_date,
+                absence_type=EmployeeAbsence.Type.VACATION,
+            ),
+        ])
+        self.client.force_login(manager)
+
+        response = self.client.get(
+            reverse("annual_vacations", args=[self.team.id]),
+            {"year": 2026},
+        )
+
+        july = response.context["months"][6]
+        vacation_rows = {
+            row["user"].id: row["cells"][9]["is_vacation"]
+            for row in july["rows"]
+        }
+        self.assertTrue(vacation_rows[self.users[0].id])
+        self.assertTrue(vacation_rows[second_employee.id])
+        self.assertContains(response, self.users[0].full_name)
+        self.assertContains(response, second_employee.full_name)
+
+    def test_vacation_is_shown_in_month_with_existing_duty_conflict(self):
+        vacation_date = date(2026, 1, 5)
+        EmployeeAbsence.objects.create(
+            user=self.users[0],
+            date=vacation_date,
+            absence_type=EmployeeAbsence.Type.VACATION,
+        )
+        Duty.objects.create(
+            team=self.team,
+            user=self.users[0],
+            date=vacation_date,
+            shift_type=self.weekday_shift,
+        )
+
+        response = self.client.get(
+            reverse("month_schedule"),
+            {"team": self.team.id, "year": 2026, "month": 1},
+        )
+
+        self.assertContains(response, "ОТП")
+        self.assertContains(response, "Назначена смена")
+        self.assertContains(response, "Отпуска на год")
+
+    def test_generator_never_assigns_shift_during_vacation(self):
+        vacation_date = date(2026, 1, 5)
+        EmployeeAbsence.objects.create(
+            user=self.users[0],
+            date=vacation_date,
+            absence_type=EmployeeAbsence.Type.VACATION,
+        )
+
+        ScheduleGenerator(self.schedule_month).generate()
+
+        self.assertFalse(
+            Duty.objects.filter(user=self.users[0], date=vacation_date).exists()
+        )
+
+    def test_export_marks_vacation(self):
+        EmployeeAbsence.objects.create(
+            user=self.users[0],
+            date=date(2026, 1, 5),
+            absence_type=EmployeeAbsence.Type.VACATION,
+        )
+
+        response = self.client.get(
+            reverse("export_month_schedule"),
+            {"team": self.team.id, "year": 2026, "month": 1},
+        )
+
+        with ZipFile(BytesIO(response.content)) as workbook:
+            sheet = workbook.read("xl/worksheets/sheet1.xml").decode("utf-8")
+        self.assertIn("Отпуск", sheet)
+
+    def test_manager_cannot_open_another_team_vacations(self):
+        other_team = Team.objects.create(name="Чужие отпуска")
+        manager = self.make_manager("own-team-manager", "Заведующий своего коллектива")
+        self.client.force_login(manager)
+
+        response = self.client.get(
+            reverse("annual_vacations", args=[other_team.id])
+        )
+
+        self.assertEqual(response.status_code, 404)

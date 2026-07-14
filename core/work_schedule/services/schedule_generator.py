@@ -9,7 +9,9 @@ from work_schedule.models import (
     ShiftType,
     ScheduleMonth,
     DutyDatePreference,
+    EmployeeAbsence,
     PartTimeWorkload,
+    ScheduleHoliday,
 )
 from ortools.sat.python import cp_model
 
@@ -32,6 +34,8 @@ class ScheduleGenerator:
         self.weekend_shifts = []
 
         self.preferences = {}
+        self.absences = set()
+        self.holidays = set()
 
         self.target_hours = {}
 
@@ -94,6 +98,19 @@ class ScheduleGenerator:
                 (pref.user_id, pref.date)
             ] = pref.status
 
+        self.absences = set(
+            EmployeeAbsence.objects.filter(
+                user__in=self.users,
+                date__year=self.schedule_month.year,
+                date__month=self.schedule_month.month,
+            ).values_list("user_id", "date")
+        )
+        self.holidays = set(
+            ScheduleHoliday.objects.filter(
+                month=self.schedule_month,
+            ).values_list("date", flat=True)
+        )
+
         for user in self.users:
 
             if user.employee_type == User.EmployeeType.MAIN:
@@ -128,9 +145,12 @@ class ScheduleGenerator:
         """Return all shift types allowed on this calendar date."""
         return (
             self.weekend_shifts
-            if current_date.weekday() >= 5
+            if self.is_weekend_rule_date(current_date)
             else self.weekday_shifts
         )
+
+    def is_weekend_rule_date(self, current_date):
+        return current_date.weekday() >= 5 or current_date in self.holidays
 
     def create_variables(self):
 
@@ -209,7 +229,8 @@ class ScheduleGenerator:
             ]
             required_people = (
                 self.schedule_month.increased_staff_count
-                if current_date.weekday() in self.schedule_month.increased_staff_weekday_set
+                if not self.is_weekend_rule_date(current_date)
+                and current_date.weekday() in self.schedule_month.increased_staff_weekday_set
                 else 1
             )
             self.model.Add(sum(vars) == required_people)
@@ -273,6 +294,22 @@ class ScheduleGenerator:
                         self.variables[(user.id, current_date, shift.id)] == 0
                     )
 
+    def add_absences_constraint(self):
+        """An approved absence is a hard ban on all shifts for that date."""
+        year = self.schedule_month.year
+        month = self.schedule_month.month
+        days = monthrange(year, month)[1]
+
+        for day in range(1, days + 1):
+            current_date = date(year, month, day)
+            for user in self.users:
+                if (user.id, current_date) not in self.absences:
+                    continue
+                for shift in self.shifts_for_date(current_date):
+                    self.model.Add(
+                        self.variables[(user.id, current_date, shift.id)] == 0
+                    )
+
     def add_part_time_days_constraint(self):
         """Part-time employees may work only on Tuesdays and Fridays."""
         year = self.schedule_month.year
@@ -284,7 +321,10 @@ class ScheduleGenerator:
                 continue
             for day in range(1, days + 1):
                 current_date = date(year, month, day)
-                if current_date.weekday() in self.schedule_month.part_time_allowed_weekday_set:
+                if (
+                    not self.is_weekend_rule_date(current_date)
+                    and current_date.weekday() in self.schedule_month.part_time_allowed_weekday_set
+                ):
                     continue
                 for shift in self.shifts_for_date(current_date):
                     self.model.Add(
@@ -400,6 +440,7 @@ class ScheduleGenerator:
             var
             for (user_id, duty_date, _shift_id), var in self.variables.items()
             if self.users_map[user_id].employee_type == User.EmployeeType.PART_TIME
+            and not self.is_weekend_rule_date(duty_date)
             and duty_date.weekday() in self.schedule_month.increased_staff_weekday_set
         )
 
@@ -509,6 +550,8 @@ class ScheduleGenerator:
         self.add_no_consecutive_weekend_days_constraint()
 
         self.add_preferences_constraint()
+
+        self.add_absences_constraint()
 
         self.add_part_time_days_constraint()
 

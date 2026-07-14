@@ -48,6 +48,8 @@
 </div>
 
 <div class="schedule-legend mb-3">
+    <span><i class="preference-dot preference-dot--vacation"></i> Отпуск</span>
+    <span><i class="preference-dot preference-dot--holiday"></i> Праздник (как выходной)</span>
     <span><i class="preference-dot preference-dot--available"></i> Могу</span>
     <span><i class="preference-dot preference-dot--unavailable"></i> Не могу</span>
 </div>
@@ -63,6 +65,10 @@
         </a>
     {% endif %}
 {% endif %}
+
+<a class="btn btn-outline-primary mb-3" href="{% url 'annual_vacations' selected_team.id %}?year={{ year }}">
+    Отпуска на год
+</a>
 
 {% if can_manage %}
     <div class="card border-primary mb-3 schedule-admin-panel">
@@ -100,7 +106,7 @@
             <th>Тип</th>
 
             {% for day in days %}
-                <th class="{% if day.is_weekend %}weekend-cell{% endif %}">{{ day.number }}</th>
+                <th class="{% if day.is_holiday %}holiday-cell{% elif day.is_weekend %}weekend-cell{% endif %}">{{ day.number }}</th>
             {% endfor %}
 
             <th>Часы</th>
@@ -123,9 +129,14 @@
 
             {% for cell in row.cells %}
 
-                <td class="{% if cell.preference_status == 'AVAILABLE' %}preference-available{% elif cell.preference_status == 'UNAVAILABLE' %}preference-unavailable{% elif cell.is_weekend %}weekend-cell{% endif %}">
+                <td class="{% if cell.absence %}vacation-cell{% elif cell.preference_status == 'AVAILABLE' %}preference-available{% elif cell.preference_status == 'UNAVAILABLE' %}preference-unavailable{% elif cell.is_holiday %}holiday-cell{% elif cell.is_weekend %}weekend-cell{% endif %}">
 
-                    {% if cell.duty %}
+                    {% if cell.absence %}
+                        ОТП
+                        {% if cell.duty %}
+                            <span class="vacation-conflict" title="{{ cell.duty.shift_type.name }}">⚠ Назначена смена</span>
+                        {% endif %}
+                    {% elif cell.duty %}
                         {{ cell.duty.shift_type.name }}
                     {% endif %}
 
