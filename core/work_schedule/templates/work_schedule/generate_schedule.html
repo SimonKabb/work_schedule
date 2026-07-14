@@ -1,38 +1,29 @@
-<!DOCTYPE html>
+{% extends "base.html" %}
 
-<html>
+{% block title %}Пересоздание графика{% endblock %}
 
-<head>
-    <title>Генерация графика</title>
-</head>
-
-
-<body>
-
-<h1>
-    Генерация графика дежурств
-</h1>
-
-
-<p>
-    Месяц:
-    {{ month.year }}
-    -
-    {{ month.month }}
-</p>
-
-
-<form method="post">
-
-    {% csrf_token %}
-
-    <button type="submit">
-        Сгенерировать
-    </button>
-
-</form>
-
-
-</body>
-
-</html>
+{% block content %}
+<div class="card" style="max-width: 620px;">
+    <div class="card-body">
+        <h1 class="h3">Пересоздать график</h1>
+        <p>Месяц: <strong>{{ month.month }}.{{ month.year }}</strong></p>
+        <div class="mb-3">
+            <div><strong>Смены в будни:</strong>
+                {% for shift in weekday_shifts %}{{ shift.name }} ({{ shift.hours }} ч){% if not forloop.last %}, {% endif %}{% empty %}<span class="text-danger">не настроены</span>{% endfor %}
+            </div>
+            <div><strong>Смены в выходные:</strong>
+                {% for shift in weekend_shifts %}{{ shift.name }} ({{ shift.hours }} ч){% if not forloop.last %}, {% endif %}{% empty %}<span class="text-danger">не настроены</span>{% endfor %}
+            </div>
+            <a href="{% url 'admin:work_schedule_shifttype_changelist' %}" class="btn btn-sm btn-outline-secondary mt-2">Изменить смены</a>
+        </div>
+        <div class="alert alert-warning">
+            Автоматически созданные смены за этот месяц будут удалены и сформированы заново.
+        </div>
+        <form method="post">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-primary" {% if not weekday_shifts or not weekend_shifts %}disabled{% endif %}>Создать график</button>
+            <a class="btn btn-outline-secondary" href="{% url 'month_schedule' %}?year={{ month.year }}&month={{ month.month }}">Отмена</a>
+        </form>
+    </div>
+</div>
+{% endblock %}

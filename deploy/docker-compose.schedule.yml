@@ -1,0 +1,5 @@
+services:
+  nginx:
+    volumes:
+      - /opt/work_schedule/static:/var/www/schedule-static:ro
+      - /opt/nodus/certbot:/var/www/certbot:ro

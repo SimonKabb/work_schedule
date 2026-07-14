@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Регистрация сотрудников{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 760px;">
+    <div class="card-body p-4">
+        <h1 class="h4 mb-2">Регистрация: {{ team.name }}</h1>
+        <p class="text-muted">
+            Отправьте сотруднику ссылку или покажите QR-код. После регистрации он автоматически
+            попадёт только в этот коллектив.
+        </p>
+
+        <label class="form-label" for="registration-url">Ссылка для сотрудников</label>
+        <div class="input-group mb-4">
+            <input id="registration-url" class="form-control" value="{{ registration_url }}" readonly>
+            <button id="copy-registration-url" class="btn btn-outline-primary" type="button">Копировать</button>
+        </div>
+
+        <div class="d-flex flex-wrap align-items-center gap-4 mb-4">
+            <img src="{% url 'team_invitation_qr' team.id %}"
+                 alt="QR-код регистрации в коллективе {{ team.name }}"
+                 width="260" height="260" class="border rounded bg-white p-2">
+            <div>
+                <p class="mb-3">Код можно распечатать или сохранить как SVG.</p>
+                <a class="btn btn-outline-secondary"
+                   href="{% url 'team_invitation_qr' team.id %}"
+                   download="registration-{{ team.id }}.svg">Сохранить QR-код</a>
+            </div>
+        </div>
+
+        <div class="border-top pt-3">
+            <p class="small text-muted mb-2">
+                Если ссылка попала посторонним, создайте новую. Старая сразу перестанет работать.
+            </p>
+            <form method="post" action="{% url 'reset_team_invitation' team.id %}">
+                {% csrf_token %}
+                <button class="btn btn-outline-danger" type="submit">Заменить ссылку и QR-код</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.getElementById('copy-registration-url').addEventListener('click', async function () {
+        const input = document.getElementById('registration-url');
+        try {
+            await navigator.clipboard.writeText(input.value);
+            this.textContent = 'Скопировано';
+        } catch (error) {
+            input.select();
+            document.execCommand('copy');
+            this.textContent = 'Скопировано';
+        }
+    });
+</script>
+{% endblock %}

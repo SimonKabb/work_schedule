@@ -1,0 +1,8 @@
+.git
+.gitignore
+.DS_Store
+core/.DS_Store
+core/venv
+core/db.sqlite3
+**/__pycache__
+**/*.pyc

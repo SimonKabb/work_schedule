@@ -1,17 +1,109 @@
 {% extends "base.html" %}
 {% block content %}
 {% load scheduler_tags %}
-<h2>График за {{ month }}.{{ year }}</h2>
+<h2>График: {{ selected_team.name }} — {{ month_name }} {{ year }}</h2>
 
-<table class="table table-bordered table-sm">
+<div class="month-picker mb-3">
+    <div class="month-picker__nav">
+        <a class="btn btn-outline-secondary month-arrow" href="?team={{ selected_team.id }}&year={{ previous_year }}&month={{ previous_month }}" aria-label="Предыдущий месяц">←</a>
+        <form method="get" class="month-picker__form">
+            {% if teams|length > 1 %}
+                <div class="month-field">
+                    <label for="team" class="form-label mb-1">Коллектив</label>
+                    <select id="team" name="team" class="form-select">
+                        {% for team in teams %}
+                            <option value="{{ team.id }}" {% if team == selected_team %}selected{% endif %}>{{ team.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            {% else %}
+                <input type="hidden" name="team" value="{{ selected_team.id }}">
+            {% endif %}
+            <div class="month-field">
+                <label for="month" class="form-label mb-1">Месяц</label>
+                <select id="month" name="month" class="form-select">
+                    {% for number, name in month_options %}
+                        <option value="{{ number }}" {% if number == month %}selected{% endif %}>{{ name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="year-field">
+                <label for="year" class="form-label mb-1">Год</label>
+                <select id="year" name="year" class="form-select">
+                    {% for option_year in year_options %}
+                        <option value="{{ option_year }}" {% if option_year == year %}selected{% endif %}>{{ option_year }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button class="btn btn-primary month-submit" type="submit">Показать</button>
+        </form>
+        <a class="btn btn-outline-secondary month-arrow" href="?team={{ selected_team.id }}&year={{ next_year }}&month={{ next_month }}" aria-label="Следующий месяц">→</a>
+    </div>
+    <div class="month-picker__actions">
+        <a class="btn btn-outline-primary" href="{% url 'month_schedule' %}?team={{ selected_team.id }}">Сегодня</a>
+        <a class="btn btn-outline-success" href="{% url 'export_month_schedule' %}?team={{ selected_team.id }}&year={{ year }}&month={{ month }}">
+            Excel
+        </a>
+    </div>
+</div>
+
+<div class="schedule-legend mb-3">
+    <span><i class="preference-dot preference-dot--available"></i> Могу</span>
+    <span><i class="preference-dot preference-dot--unavailable"></i> Не могу</span>
+</div>
+
+{% if schedule_month and request.user.is_authenticated %}
+    {% if can_participate %}
+        <a class="btn btn-primary mb-3 preference-link" href="{% url 'preference_calendar' schedule_month.id %}">
+            Мои предпочтения
+        </a>
+    {% elif can_manage and first_employee %}
+        <a class="btn btn-primary mb-3 preference-link" href="{% url 'admin_preference_calendar' schedule_month.id first_employee.id %}">
+            Предпочтения сотрудников
+        </a>
+    {% endif %}
+{% endif %}
+
+{% if can_manage %}
+    <div class="card border-primary mb-3 schedule-admin-panel">
+        <div class="card-body py-3">
+            <div class="fw-semibold mb-2">Управление графиком</div>
+            {% if schedule_month %}
+                <a class="btn btn-primary" href="{% url 'generate_schedule' schedule_month.id %}">
+                    Создать график
+                </a>
+                <a class="btn btn-outline-secondary" href="{% url 'admin:work_schedule_schedulemonth_change' schedule_month.id %}">
+                    Настройки месяца
+                </a>
+            {% else %}
+                <a class="btn btn-primary" href="{% url 'admin:work_schedule_schedulemonth_add' %}?year={{ year }}&month={{ month }}">
+                    Настроить этот месяц
+                </a>
+                <span class="text-muted ms-2">Сначала укажите норму часов и правила месяца.</span>
+            {% endif %}
+            <a class="btn btn-outline-secondary" href="{% url 'admin:work_schedule_shifttype_changelist' %}">
+                Смены
+            </a>
+            <a class="btn btn-outline-secondary" href="{% url 'team_invitation' selected_team.id %}">
+                Регистрация сотрудников
+            </a>
+        </div>
+    </div>
+{% endif %}
+
+<div class="schedule-table-wrap">
+<table class="table table-bordered table-sm schedule-table">
 
     <thead>
         <tr>
             <th>Сотрудник</th>
+            <th>Тип</th>
 
             {% for day in days %}
-                <th>{{ day }}</th>
+                <th class="{% if day.is_weekend %}weekend-cell{% endif %}">{{ day.number }}</th>
             {% endfor %}
+
+            <th>Часы</th>
 
         </tr>
     </thead>
@@ -25,18 +117,23 @@
             <td>
                 {{ row.user.full_name }}
             </td>
+            <td>
+                {% if row.user.employee_type == "MAIN" %}осн{% else %}совм{% endif %}
+            </td>
 
-            {% for duty in row.cells %}
+            {% for cell in row.cells %}
 
-                <td>
+                <td class="{% if cell.preference_status == 'AVAILABLE' %}preference-available{% elif cell.preference_status == 'UNAVAILABLE' %}preference-unavailable{% elif cell.is_weekend %}weekend-cell{% endif %}">
 
-                    {% if duty %}
-                        {{ duty.shift_type.name }}
+                    {% if cell.duty %}
+                        {{ cell.duty.shift_type.name }}
                     {% endif %}
 
                 </td>
 
             {% endfor %}
+
+            <td><strong>{{ row.total_hours }}</strong></td>
 
         </tr>
 
@@ -45,5 +142,6 @@
     </tbody>
 
 </table>
+</div>
 
 {% endblock %}

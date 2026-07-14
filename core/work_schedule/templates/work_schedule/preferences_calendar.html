@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}Предпочтения по сменам{% endblock %}
+
+{% block extra_head %}
+<style>
+    .preference-calendar {
+        max-width: 880px;
+        table-layout: fixed;
+    }
+
+    .preference-calendar th,
+    .preference-calendar td {
+        width: 14.285%;
+        height: 92px;
+        white-space: normal;
+    }
+
+    .preference-day {
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        background: #fff;
+        height: 100%;
+        width: 100%;
+        text-align: left;
+        padding: 10px;
+        transition: .15s ease;
+    }
+
+    .preference-day:hover { border-color: #0d6efd; }
+    .preference-day.is-weekend { background: #f1f3f5; }
+    .preference-day.is-available { background: #d1e7dd; border-color: #75b798; }
+    .preference-day.is-unavailable { background: #f8d7da; border-color: #ea868f; }
+    .preference-day .label { display: block; margin-top: 8px; font-size: 12px; }
+    .preference-day.is-saving { opacity: .55; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <div>
+        <h2 class="mb-1">Предпочтения: {{ schedule_month.month }}.{{ schedule_month.year }}</h2>
+        <div class="text-muted">Сотрудник: {{ selected_user.full_name }}</div>
+    </div>
+</div>
+
+{% if can_manage %}
+    <div class="mb-3">
+        <div class="small text-muted mb-1">
+            Самостоятельно отметились: {{ completed_preference_count }} из {{ employees|length }}.
+            Зелёная точка означает, что сотрудник уже менял свои предпочтения.
+        </div>
+        <div class="small text-muted mb-1">Редактировать предпочтения сотрудника:</div>
+        <div class="btn-group flex-wrap" role="group">
+            {% for employee in employees %}
+                {% if employee == request.user %}
+                    <a class="btn btn-outline-secondary {% if employee == selected_user %}active{% endif %}"
+                       href="{% url 'preference_calendar' schedule_month.id %}">
+                        {% if employee.preference_updated_at %}<span class="text-success">●</span>{% endif %}
+                        {{ employee.full_name }}
+                    </a>
+                {% else %}
+                    <a class="btn btn-outline-secondary {% if employee == selected_user %}active{% endif %}"
+                       href="{% url 'admin_preference_calendar' schedule_month.id employee.id %}">
+                        {% if employee.preference_updated_at %}<span class="text-success">●</span>{% endif %}
+                        {{ employee.full_name }}
+                    </a>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+{% endif %}
+
+<div class="d-flex flex-wrap gap-2 mb-3">
+    <button type="button" class="btn btn-success preference-mode" data-status="AVAILABLE">Могу</button>
+    <button type="button" class="btn btn-danger preference-mode" data-status="UNAVAILABLE">Не могу</button>
+    <button type="button" class="btn btn-outline-secondary preference-mode" data-status="CLEAR">Очистить отметку</button>
+    <span id="mode-hint" class="align-self-center text-muted">Выберите режим, затем нажмите на день.</span>
+</div>
+
+<form id="preference-form" method="post"
+      action="{% if can_manage and selected_user != request.user %}{% url 'admin_set_preference' schedule_month.id selected_user.id %}{% else %}{% url 'set_preference' schedule_month.id %}{% endif %}">
+    {% csrf_token %}
+    <input type="hidden" name="date" id="selected-date">
+    <input type="hidden" name="status" id="selected-status">
+</form>
+
+<table class="table preference-calendar">
+    <thead>
+        <tr>
+            <th>Пн</th><th>Вт</th><th>Ср</th><th>Чт</th><th>Пт</th><th>Сб</th><th>Вс</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for week in calendar_weeks %}
+            <tr>
+                {% for cell in week %}
+                    <td class="p-1">
+                        {% if cell.day %}
+                            <button type="button"
+                                    class="preference-day {% if cell.is_weekend %}is-weekend{% endif %} {% if cell.status == 'AVAILABLE' %}is-available{% elif cell.status == 'UNAVAILABLE' %}is-unavailable{% endif %}"
+                                    data-date="{{ cell.date|date:'Y-m-d' }}">
+                                <strong>{{ cell.day }}</strong>
+                                {% if cell.status == 'AVAILABLE' %}<span class="label">Могу</span>{% endif %}
+                                {% if cell.status == 'UNAVAILABLE' %}<span class="label">Не могу</span>{% endif %}
+                            </button>
+                        {% endif %}
+                    </td>
+                {% endfor %}
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<script>
+    const modeButtons = document.querySelectorAll('.preference-mode');
+    const dayButtons = document.querySelectorAll('.preference-day');
+    const form = document.getElementById('preference-form');
+    const statusInput = document.getElementById('selected-status');
+    const dateInput = document.getElementById('selected-date');
+    const hint = document.getElementById('mode-hint');
+    const storageKey = 'preference-mode-{{ schedule_month.id }}-{{ selected_user.id }}';
+    let selectedStatus = sessionStorage.getItem(storageKey) || 'AVAILABLE';
+
+    function setMode(status, button) {
+        selectedStatus = status;
+        sessionStorage.setItem(storageKey, status);
+        modeButtons.forEach((item) => item.classList.remove('active'));
+        modeButtons.forEach((item) => item.setAttribute('aria-pressed', 'false'));
+        button.classList.add('active');
+        button.setAttribute('aria-pressed', 'true');
+        hint.textContent = `Режим: ${button.textContent.trim()}. Можно отметить несколько дней подряд.`;
+    }
+
+    modeButtons.forEach((button) => {
+        button.addEventListener('click', () => setMode(button.dataset.status, button));
+    });
+    const initialModeButton = Array.from(modeButtons).find(
+        (button) => button.dataset.status === selectedStatus
+    ) || modeButtons[0];
+    setMode(initialModeButton.dataset.status, initialModeButton);
+
+    function updateDay(button, status) {
+        button.classList.remove('is-available', 'is-unavailable');
+        const oldLabel = button.querySelector('.label');
+        if (oldLabel) oldLabel.remove();
+
+        if (status === 'AVAILABLE') {
+            button.classList.add('is-available');
+        } else if (status === 'UNAVAILABLE') {
+            button.classList.add('is-unavailable');
+        }
+
+        if (status !== 'CLEAR') {
+            const label = document.createElement('span');
+            label.className = 'label';
+            label.textContent = status === 'AVAILABLE' ? 'Могу' : 'Не могу';
+            button.appendChild(label);
+        }
+    }
+
+    dayButtons.forEach((button) => {
+        button.addEventListener('click', async () => {
+            if (button.classList.contains('is-saving')) return;
+
+            const payload = new FormData(form);
+            payload.set('date', button.dataset.date);
+            payload.set('status', selectedStatus);
+            button.classList.add('is-saving');
+
+            try {
+                const response = await fetch(form.action, {
+                    method: 'POST',
+                    body: payload,
+                    headers: {'X-Requested-With': 'XMLHttpRequest'},
+                    credentials: 'same-origin',
+                });
+                if (!response.ok) throw new Error('save-failed');
+                updateDay(button, selectedStatus);
+                hint.textContent = 'Сохранено. Можно выбрать следующий день.';
+            } catch (error) {
+                hint.textContent = 'Не удалось сохранить. Проверьте соединение и попробуйте снова.';
+            } finally {
+                button.classList.remove('is-saving');
+            }
+        });
+    });
+</script>
+{% endblock %}

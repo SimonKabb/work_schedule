@@ -2,6 +2,7 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>{% block title %}Schedule{% endblock %}</title>
 
     <!-- Bootstrap (чтобы сразу красиво) -->
@@ -12,8 +13,30 @@
             padding: 20px;
         }
 
+        html, body {
+            max-width: 100%;
+        }
+
         table {
             font-size: 13px;
+        }
+
+        .schedule-table-wrap {
+            width: 100%;
+            max-width: 100%;
+            overflow-x: auto;
+            overflow-y: hidden;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            -webkit-overflow-scrolling: touch;
+            touch-action: pan-x pan-y;
+            overscroll-behavior-x: contain;
+        }
+
+        .schedule-table {
+            width: max-content;
+            min-width: 100%;
+            margin-bottom: 0;
         }
 
         th, td {
@@ -28,6 +51,262 @@
             background: white;
             z-index: 2;
         }
+
+        .schedule-table th:first-child,
+        .schedule-table td:first-child {
+            min-width: 145px;
+        }
+
+        .weekend-cell {
+            background: #f1f3f5 !important;
+        }
+
+        .month-picker,
+        .month-picker__form,
+        .schedule-legend {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: end;
+            gap: 10px;
+        }
+
+        .month-picker {
+            align-items: end;
+            justify-content: space-between;
+        }
+
+        .month-picker__nav,
+        .month-picker__actions {
+            display: flex;
+            align-items: end;
+            gap: 8px;
+        }
+
+        .month-arrow {
+            min-width: 42px;
+        }
+
+        .month-picker .form-select {
+            min-width: 150px;
+        }
+
+        .month-picker #year {
+            min-width: 105px;
+        }
+
+        .schedule-legend {
+            align-items: center;
+            color: #5b6470;
+            font-size: 13px;
+        }
+
+        .preference-dot {
+            display: inline-block;
+            width: 11px;
+            height: 11px;
+            margin-right: 4px;
+            border-radius: 50%;
+        }
+
+        .preference-dot--available,
+        .preference-available {
+            background: #d9f2df !important;
+        }
+
+        .preference-dot--unavailable,
+        .preference-unavailable {
+            background: #f9d6d9 !important;
+        }
+
+        .preference-available {
+            box-shadow: inset 0 0 0 1px #9bd0a8;
+        }
+
+        .preference-unavailable {
+            box-shadow: inset 0 0 0 1px #e5a3a9;
+        }
+
+        .app-nav {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .app-nav form {
+            margin: 0;
+        }
+
+        .card input[type="text"],
+        .card input[type="password"] {
+            display: block;
+            width: 100%;
+            padding: .5rem .75rem;
+            border: 1px solid #ced4da;
+            border-radius: .375rem;
+        }
+
+        @media (max-width: 767px) {
+            html, body {
+                overflow-x: hidden;
+            }
+
+            body {
+                padding: 10px;
+                font-size: 14px;
+            }
+
+            .app-nav {
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 6px;
+                padding-bottom: 8px;
+                border-bottom: 1px solid #e9ecef;
+            }
+
+            .app-nav h4 {
+                width: auto;
+                margin-right: auto;
+                font-size: 18px;
+            }
+
+            .app-nav .ms-auto {
+                margin-left: 0 !important;
+                max-width: 145px;
+                overflow: hidden;
+                font-size: 12px;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .app-nav .btn {
+                padding: 4px 8px;
+                font-size: 12px;
+            }
+
+            h2 {
+                margin: 14px 0 12px;
+                font-size: 22px;
+            }
+
+            .month-picker {
+                display: block;
+            }
+
+            .month-picker__nav {
+                width: 100%;
+                align-items: end;
+                gap: 5px;
+            }
+
+            .month-picker__form {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) 88px auto;
+                align-items: end;
+                flex: 1;
+                gap: 5px;
+            }
+
+            .month-picker label {
+                margin-left: 2px;
+                color: #6c757d;
+                font-size: 11px;
+            }
+
+            .month-picker .form-select,
+            .month-picker #year {
+                width: 100%;
+                min-width: 0;
+                height: 38px;
+                padding: 5px 28px 5px 8px;
+                font-size: 13px;
+            }
+
+            .month-picker .btn {
+                height: 38px;
+                padding: 7px 10px;
+                font-size: 13px;
+            }
+
+            .month-arrow {
+                min-width: 36px;
+                padding-left: 8px !important;
+                padding-right: 8px !important;
+            }
+
+            .month-submit {
+                min-width: 74px;
+            }
+
+            .month-picker__actions {
+                justify-content: flex-end;
+                margin-top: 7px;
+            }
+
+            .month-picker__actions .btn {
+                height: auto;
+                padding: 4px 10px;
+                font-size: 12px;
+            }
+
+            .schedule-legend {
+                margin-bottom: 10px !important;
+                font-size: 12px;
+            }
+
+            .preference-link {
+                width: auto;
+                margin-bottom: 10px !important;
+                padding: 6px 10px;
+                font-size: 13px;
+            }
+
+            .schedule-admin-panel .card-body {
+                padding: 10px;
+            }
+
+            .schedule-admin-panel .fw-semibold {
+                margin-bottom: 6px !important;
+                font-size: 13px;
+            }
+
+            .schedule-admin-panel .btn {
+                margin: 2px 1px;
+                padding: 5px 8px;
+                font-size: 12px;
+            }
+
+            .schedule-table th,
+            .schedule-table td {
+                min-width: 42px;
+                height: 40px;
+                padding: 5px 4px;
+                font-size: 12px;
+            }
+
+            .schedule-table {
+                width: auto;
+                min-width: 1500px;
+            }
+
+            .schedule-table th:first-child,
+            .schedule-table td:first-child {
+                min-width: 125px;
+                box-shadow: 3px 0 6px rgba(0, 0, 0, .08);
+            }
+
+            .schedule-table-wrap::before {
+                content: "← Листайте график →";
+                display: block;
+                position: sticky;
+                left: 0;
+                width: max-content;
+                max-width: calc(100vw - 42px);
+                padding: 6px 8px;
+                color: #5b6470;
+                background: #f8f9fa;
+                font-size: 11px;
+            }
+        }
     </style>
 
     {% block extra_head %}{% endblock %}
@@ -35,11 +314,29 @@
 
 <body>
 
-<nav class="mb-3">
-    <h4>📅 График смен</h4>
+<nav class="app-nav mb-3">
+    <h4 class="mb-0">📅 График смен</h4>
+    <a href="{% url 'month_schedule' %}" class="btn btn-outline-secondary btn-sm">График</a>
+    {% if request.user.is_authenticated %}
+        {% if request.user.is_staff %}
+            <a href="{% url 'admin:index' %}" class="btn btn-outline-secondary btn-sm">Администрирование</a>
+        {% endif %}
+        <span class="ms-auto text-muted">{{ request.user.full_name|default:request.user.username }}</span>
+        <form method="post" action="{% url 'logout' %}">
+            {% csrf_token %}
+            <button class="btn btn-outline-secondary btn-sm">Выйти</button>
+        </form>
+    {% else %}
+        <a href="{% url 'login' %}" class="ms-auto btn btn-primary btn-sm">Войти</a>
+    {% endif %}
 </nav>
 
 <div class="container-fluid">
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags|default:'info' }}">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
     {% block content %}{% endblock %}
 </div>
 

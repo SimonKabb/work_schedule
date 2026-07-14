@@ -1,0 +1,23 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block title %}{{ title }} | График смен{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'work_schedule/admin.css' %}">
+{% endblock %}
+
+{% block branding %}
+<div class="schedule-brand">
+    <span class="schedule-brand__icon">К</span>
+    <div>
+        <div class="schedule-brand__title">График смен</div>
+        <div class="schedule-brand__subtitle">Панель управления</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block nav-global %}
+<a class="schedule-site-link" href="{% url 'month_schedule' %}">Открыть график →</a>
+{% endblock %}

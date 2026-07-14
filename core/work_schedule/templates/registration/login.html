@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}Вход{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 420px;">
+    <div class="card-body">
+        <h2 class="h4 mb-3">Вход в систему</h2>
+        {% if form.errors %}
+            <div class="alert alert-danger">Не удалось войти. Проверьте имя пользователя и пароль.</div>
+        {% endif %}
+        <form method="post">
+            {% csrf_token %}
+            <div class="mb-3">
+                <label class="form-label" for="id_username">Логин или имя сотрудника</label>
+                {{ form.username }}
+                <div class="form-text">Например: ermakov или Ермаков С</div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label" for="id_password">Пароль</label>
+                {{ form.password }}
+            </div>
+            <input type="hidden" name="next" value="{{ next }}">
+            <button class="btn btn-primary">Войти</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

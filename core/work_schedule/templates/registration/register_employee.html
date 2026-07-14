@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Регистрация сотрудника{% endblock %}
+
+{% block content %}
+<div class="card mx-auto" style="max-width: 520px;">
+    <div class="card-body p-4">
+        <h1 class="h4 mb-2">Регистрация сотрудника</h1>
+        <p class="text-muted mb-4">
+            Вы регистрируетесь в коллективе <strong>{{ team.name }}</strong>.
+            Изменить коллектив на этой странице нельзя.
+        </p>
+
+        <form method="post" novalidate>
+            {% csrf_token %}
+            {% for field in form %}
+                <div class="mb-3">
+                    <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                    {{ field }}
+                    {% if field.help_text %}<div class="form-text">{{ field.help_text|safe }}</div>{% endif %}
+                    {% for error in field.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+                </div>
+            {% endfor %}
+            {% for error in form.non_field_errors %}
+                <div class="alert alert-danger">{{ error }}</div>
+            {% endfor %}
+            <button class="btn btn-primary w-100" type="submit">Зарегистрироваться</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
