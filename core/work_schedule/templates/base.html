@@ -129,6 +129,15 @@
             background: #b6d4fe !important;
         }
 
+        .preference-dot--manual-duty,
+        .manual-duty-cell {
+            background: #e2d9f3 !important;
+        }
+
+        .manual-duty-cell {
+            box-shadow: inset 0 0 0 1px #b197d4;
+        }
+
         .vacation-cell {
             color: #084298;
             font-weight: 700;
@@ -141,6 +150,35 @@
             color: #842029;
             font-size: 10px;
             line-height: 1.1;
+        }
+
+        .duty-edit-link {
+            color: inherit;
+            font-weight: 600;
+            text-decoration: underline dotted;
+            text-underline-offset: 2px;
+        }
+
+        .duty-add-link {
+            display: block;
+            color: #6c757d;
+            font-size: 18px;
+            line-height: 1;
+            text-decoration: none;
+            opacity: 0;
+        }
+
+        .schedule-table td:hover .duty-add-link,
+        .duty-add-link:hover,
+        .duty-add-link:focus-visible {
+            color: #0d6efd;
+            opacity: 1;
+        }
+
+        @media (hover: none) {
+            .duty-add-link {
+                opacity: .35;
+            }
         }
 
         .preference-available {

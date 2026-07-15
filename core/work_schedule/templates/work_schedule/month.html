@@ -50,6 +50,7 @@
 <div class="schedule-legend mb-3">
     <span><i class="preference-dot preference-dot--vacation"></i> Отпуск</span>
     <span><i class="preference-dot preference-dot--holiday"></i> Праздник (как выходной)</span>
+    <span><i class="preference-dot preference-dot--manual-duty"></i> Смена задана вручную</span>
     <span><i class="preference-dot preference-dot--available"></i> Могу</span>
     <span><i class="preference-dot preference-dot--unavailable"></i> Не могу</span>
 </div>
@@ -88,7 +89,10 @@
                 <span class="text-muted ms-2">Сначала укажите норму часов и правила месяца.</span>
             {% endif %}
             <a class="btn btn-outline-secondary" href="{% url 'admin:work_schedule_shifttype_changelist' %}">
-                Смены
+                Типы смен
+            </a>
+            <a class="btn btn-outline-secondary" href="{% url 'admin:work_schedule_duty_changelist' %}?team__id__exact={{ selected_team.id }}&date__year={{ year }}&date__month={{ month }}">
+                Редактировать назначения
             </a>
             <a class="btn btn-outline-secondary" href="{% url 'team_invitation' selected_team.id %}">
                 Регистрация сотрудников
@@ -129,15 +133,25 @@
 
             {% for cell in row.cells %}
 
-                <td class="{% if cell.absence %}vacation-cell{% elif cell.preference_status == 'AVAILABLE' %}preference-available{% elif cell.preference_status == 'UNAVAILABLE' %}preference-unavailable{% elif cell.is_holiday %}holiday-cell{% elif cell.is_weekend %}weekend-cell{% endif %}">
+                <td class="{% if cell.absence %}vacation-cell{% elif cell.duty and not cell.duty.generated %}manual-duty-cell{% elif cell.preference_status == 'AVAILABLE' %}preference-available{% elif cell.preference_status == 'UNAVAILABLE' %}preference-unavailable{% elif cell.is_holiday %}holiday-cell{% elif cell.is_weekend %}weekend-cell{% endif %}">
 
                     {% if cell.absence %}
                         ОТП
                         {% if cell.duty %}
-                            <span class="vacation-conflict" title="{{ cell.duty.shift_type.name }}">⚠ Назначена смена</span>
+                            {% if can_manage %}
+                                <a class="vacation-conflict" href="{% url 'admin:work_schedule_duty_change' cell.duty.id %}" title="{{ cell.duty.shift_type.name }}">⚠ Назначена смена</a>
+                            {% else %}
+                                <span class="vacation-conflict" title="{{ cell.duty.shift_type.name }}">⚠ Назначена смена</span>
+                            {% endif %}
                         {% endif %}
                     {% elif cell.duty %}
-                        {{ cell.duty.shift_type.name }}
+                        {% if can_manage %}
+                            <a class="duty-edit-link" href="{% url 'admin:work_schedule_duty_change' cell.duty.id %}" title="Изменить назначение">{{ cell.duty.shift_type.name }}</a>
+                        {% else %}
+                            {{ cell.duty.shift_type.name }}
+                        {% endif %}
+                    {% elif can_manage %}
+                        <a class="duty-add-link" href="{% url 'admin:work_schedule_duty_add' %}?team={{ selected_team.id }}&user={{ row.user.id }}&date={{ cell.date|date:'Y-m-d' }}" title="Добавить смену">+</a>
                     {% endif %}
 
                 </td>

@@ -1,4 +1,6 @@
 import uuid
+from calendar import monthrange
+from decimal import Decimal
 
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
@@ -11,20 +13,39 @@ class User(AbstractUser):
         MAIN = "MAIN", "Основной"
         PART_TIME = "PART", "Совместитель"
 
-    full_name = models.CharField(max_length=255)
+    full_name = models.CharField(max_length=255, verbose_name="ФИО")
 
     employee_type = models.CharField(
         max_length=4,
         choices=EmployeeType.choices,
         default=EmployeeType.MAIN,
+        verbose_name="Тип сотрудника",
     )
+
+    class Meta:
+        verbose_name = "Пользователь"
+        verbose_name_plural = "Пользователи"
 
     def __str__(self):
         return self.full_name
 
 
 class Team(models.Model):
+    class ScheduleRules(models.TextChoices):
+        DOCTORS = "DOCTORS", "Врачи"
+        NURSES = "NURSES", "Одна суточная смена"
+
     name = models.CharField(max_length=255, unique=True, verbose_name="Название")
+    schedule_rules = models.CharField(
+        max_length=7,
+        choices=ScheduleRules.choices,
+        default=ScheduleRules.DOCTORS,
+        verbose_name="Правила графика",
+        help_text=(
+            "Для врачей используются обычные и усиленные дни. Для медсестёр "
+            "назначается один сотрудник в сутки и используются только 23-часовые смены."
+        ),
+    )
     is_active = models.BooleanField(default=True, verbose_name="Активен")
     registration_token = models.UUIDField(
         default=uuid.uuid4,
@@ -93,11 +114,13 @@ class ScheduleMonth(models.Model):
         related_name="schedule_months",
         verbose_name="Коллектив",
     )
-    year = models.PositiveSmallIntegerField()
-    month = models.PositiveSmallIntegerField()
+    year = models.PositiveSmallIntegerField(verbose_name="Год")
+    month = models.PositiveSmallIntegerField(verbose_name="Месяц")
 
     # Все основные сотрудники должны столько отработать
-    main_employee_hours = models.PositiveSmallIntegerField()
+    main_employee_hours = models.PositiveSmallIntegerField(
+        verbose_name="Норма часов основного сотрудника"
+    )
     increased_staff_weekdays = models.CharField(
         max_length=13,
         default="1,4",
@@ -144,6 +167,8 @@ class ScheduleMonth(models.Model):
                 name="unique_schedule_month_per_team",
             )
         ]
+        verbose_name = "Месяц графика"
+        verbose_name_plural = "Месяцы графика"
     def __str__(self):
         return f"{self.team}: {self.month:02d}.{self.year}"
 
@@ -189,18 +214,21 @@ class DutyDatePreference(models.Model):
         User,
         on_delete=models.CASCADE,
         related_name="duty_date_preferences",
+        verbose_name="Сотрудник",
     )
-    date = models.DateField()
+    date = models.DateField(verbose_name="Дата")
     
     month = models.ForeignKey(
         ScheduleMonth,
         on_delete=models.CASCADE,
-        related_name="preferences"
+        related_name="preferences",
+        verbose_name="Месяц графика",
     )
 
     status = models.CharField(
         max_length=11,
         choices=Status.choices,
+        verbose_name="Предпочтение",
     )
 
     class Meta:
@@ -210,6 +238,8 @@ class DutyDatePreference(models.Model):
                 name="unique_month_user_preference_date",
             )
         ]
+        verbose_name = "Предпочтение по дате"
+        verbose_name_plural = "Предпочтения по датам"
 
 
 class PreferenceActivity(models.Model):
@@ -218,13 +248,15 @@ class PreferenceActivity(models.Model):
         User,
         on_delete=models.CASCADE,
         related_name="preference_activities",
+        verbose_name="Сотрудник",
     )
     month = models.ForeignKey(
         ScheduleMonth,
         on_delete=models.CASCADE,
         related_name="preference_activities",
+        verbose_name="Месяц графика",
     )
-    updated_at = models.DateTimeField(auto_now=True)
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Обновлено")
 
     class Meta:
         constraints = [
@@ -233,6 +265,8 @@ class PreferenceActivity(models.Model):
                 name="unique_preference_activity_per_month",
             )
         ]
+        verbose_name = "Заполнение предпочтений"
+        verbose_name_plural = "Заполнение предпочтений"
 
 
 class EmployeeAbsence(models.Model):
@@ -262,8 +296,8 @@ class EmployeeAbsence(models.Model):
         related_name="created_absences",
         verbose_name="Кто добавил",
     )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Добавлено")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Изменено")
 
     class Meta:
         constraints = [
@@ -285,14 +319,18 @@ class PartTimeWorkload(models.Model):
         ScheduleMonth,
         on_delete=models.CASCADE,
         related_name="part_time_hours",
+        verbose_name="Месяц графика",
     )
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
+        verbose_name="Сотрудник",
     )
-    hours = models.PositiveSmallIntegerField()
+    hours = models.PositiveSmallIntegerField(verbose_name="Норма часов")
     class Meta:
         unique_together = ("month", "user")
+        verbose_name = "Норма часов совместителя"
+        verbose_name_plural = "Нормы часов совместителей"
 
 class ShiftType(models.Model):
     class DayType(models.TextChoices):
@@ -306,19 +344,56 @@ class ShiftType(models.Model):
         verbose_name="Коллектив",
     )
     # Тип смены, например: "День", "Ночь", "Выходной"
-    name = models.CharField(max_length=100)
-    required_people = models.PositiveSmallIntegerField(default=1)
-    hours = models.PositiveSmallIntegerField()
+    name = models.CharField(max_length=100, verbose_name="Название")
+    required_people = models.PositiveSmallIntegerField(
+        default=1,
+        verbose_name="Требуется сотрудников",
+    )
+    hours = models.PositiveSmallIntegerField(verbose_name="Часы")
     day_type = models.CharField(
         max_length=7,
         choices=DayType.choices,
         default=DayType.WEEKDAY,
         verbose_name="Дни применения",
     )
-    locked = models.BooleanField(default=False)
+    use_in_generation = models.BooleanField(
+        default=True,
+        verbose_name="Использовать при генерации",
+        help_text=(
+            "Если выключено, смену можно назначать вручную, "
+            "но автоматический генератор выбирать её не будет."
+        ),
+    )
+    locked = models.BooleanField(default=False, verbose_name="Зафиксирована")
+
+    class Meta:
+        verbose_name = "Тип смены"
+        verbose_name_plural = "Типы смен"
 
     def __str__(self):
         return f"{self.name} ({self.hours}h)"
+
+    def clean(self):
+        super().clean()
+        if (
+            self.team_id
+            and self.team.schedule_rules == Team.ScheduleRules.NURSES
+            and self.hours != 23
+        ):
+            raise ValidationError({
+                "hours": "Для коллектива медсестёр доступны только 23-часовые смены."
+            })
+
+    def hour_units_for_date(self, duty_date):
+        """Return duration in half-hour units for a date inside its schedule month."""
+        is_last_day = duty_date.day == monthrange(duty_date.year, duty_date.month)[1]
+        if self.hours == 23 and is_last_day:
+            # A 09:00—08:00 duty contributes only 09:00—23:30 to this month.
+            return 29
+        return self.hours * 2
+
+    def hours_for_date(self, duty_date):
+        return Decimal(self.hour_units_for_date(duty_date)) / Decimal(2)
     
 class Duty(models.Model):
     # Смена, назначенная конкретному пользователю на конкретный день месяца
@@ -328,10 +403,18 @@ class Duty(models.Model):
         related_name="duties",
         verbose_name="Коллектив",
     )
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    date = models.DateField()
-    shift_type = models.ForeignKey(ShiftType, on_delete=models.PROTECT)
-    generated = models.BooleanField(default=False)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        verbose_name="Сотрудник",
+    )
+    date = models.DateField(verbose_name="Дата")
+    shift_type = models.ForeignKey(
+        ShiftType,
+        on_delete=models.PROTECT,
+        verbose_name="Тип смены",
+    )
+    generated = models.BooleanField(default=False, verbose_name="Создана генератором")
 
     class Meta:
         constraints = [
@@ -340,9 +423,15 @@ class Duty(models.Model):
                 name="unique_team_user_duty_per_day",
             )
         ]
+        verbose_name = "Смена сотрудника"
+        verbose_name_plural = "Смены сотрудников"
     @property
     def hours(self):
-        return self.shift_type.hours
+        return self.shift_type.hours_for_date(self.date)
+
+    @property
+    def hour_units(self):
+        return self.shift_type.hour_units_for_date(self.date)
 
 class ShiftRequirement(models.Model):
     # Требуемое количество сотрудников на смену и какие смены должны быть в конкретный день месяца
@@ -350,13 +439,18 @@ class ShiftRequirement(models.Model):
         ScheduleMonth,
         on_delete=models.CASCADE,
         related_name="requirements",
+        verbose_name="Месяц графика",
     )
-    date = models.DateField()
+    date = models.DateField(verbose_name="Дата")
     shift_type = models.ForeignKey(
         ShiftType,
         on_delete=models.CASCADE,
+        verbose_name="Тип смены",
     )
-    required_people = models.PositiveSmallIntegerField(default=1)
+    required_people = models.PositiveSmallIntegerField(
+        default=1,
+        verbose_name="Требуется сотрудников",
+    )
     class Meta:
         constraints = [
             models.UniqueConstraint(
@@ -364,3 +458,5 @@ class ShiftRequirement(models.Model):
                 name="unique_shift_requirement",
             )
         ]
+        verbose_name = "Требование к смене"
+        verbose_name_plural = "Требования к сменам"

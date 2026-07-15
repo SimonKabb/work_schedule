@@ -7,13 +7,25 @@
     <div class="card-body">
         <h1 class="h3">Пересоздать график</h1>
         <p>Месяц: <strong>{{ month.month }}.{{ month.year }}</strong></p>
+        <p>Правила: <strong>{{ month.team.get_schedule_rules_display }}</strong></p>
+        {% if uses_nurse_rules %}
+            <div class="alert alert-info">
+                На каждый день будет назначена одна медсестра на 23-часовую смену.
+            </div>
+        {% endif %}
         <div class="mb-3">
-            <div><strong>Смены в будни:</strong>
-                {% for shift in weekday_shifts %}{{ shift.name }} ({{ shift.hours }} ч){% if not forloop.last %}, {% endif %}{% empty %}<span class="text-danger">не настроены</span>{% endfor %}
-            </div>
-            <div><strong>Смены в выходные:</strong>
-                {% for shift in weekend_shifts %}{{ shift.name }} ({{ shift.hours }} ч){% if not forloop.last %}, {% endif %}{% empty %}<span class="text-danger">не настроены</span>{% endfor %}
-            </div>
+            {% if uses_nurse_rules %}
+                <div><strong>Суточные смены:</strong>
+                    {% for shift in nurse_shifts %}{{ shift.name }} ({{ shift.hours }} ч){% if not forloop.last %}, {% endif %}{% empty %}<span class="text-danger">не настроены</span>{% endfor %}
+                </div>
+            {% else %}
+                <div><strong>Смены в будни:</strong>
+                    {% for shift in weekday_shifts %}{{ shift.name }} ({{ shift.hours }} ч){% if not forloop.last %}, {% endif %}{% empty %}<span class="text-danger">не настроены</span>{% endfor %}
+                </div>
+                <div><strong>Смены в выходные:</strong>
+                    {% for shift in weekend_shifts %}{{ shift.name }} ({{ shift.hours }} ч){% if not forloop.last %}, {% endif %}{% empty %}<span class="text-danger">не настроены</span>{% endfor %}
+                </div>
+            {% endif %}
             <a href="{% url 'admin:work_schedule_shifttype_changelist' %}" class="btn btn-sm btn-outline-secondary mt-2">Изменить смены</a>
         </div>
         <div class="alert alert-warning">

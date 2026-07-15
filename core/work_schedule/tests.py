@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from decimal import Decimal
 from io import BytesIO
 from zipfile import ZipFile
 
@@ -20,7 +21,7 @@ from .models import (
     TeamMembership,
     User,
 )
-from .services.schedule_generator import ScheduleGenerator
+from .services.schedule_generator import ScheduleGenerationError, ScheduleGenerator
 
 
 class ScheduleGeneratorTests(TestCase):
@@ -99,6 +100,95 @@ class ScheduleGeneratorTests(TestCase):
                 all(duty.shift_type == expected_shift for duty in day_duties)
             )
 
+    def test_shift_excluded_from_generation_is_available_only_for_manual_duties(self):
+        short_shift = ShiftType.objects.create(
+            team=self.team,
+            name="Короткая смена",
+            hours=6,
+            day_type=ShiftType.DayType.WEEKDAY,
+            use_in_generation=False,
+        )
+        manual_duty = Duty.objects.create(
+            team=self.team,
+            user=self.users[0],
+            date=date(2026, 1, 5),
+            shift_type=short_shift,
+            generated=False,
+        )
+
+        ScheduleGenerator(self.schedule_month).generate()
+
+        manual_duty.refresh_from_db()
+        self.assertFalse(manual_duty.generated)
+        self.assertFalse(
+            Duty.objects.filter(shift_type=short_shift, generated=True).exists()
+        )
+        self.assertEqual(
+            Duty.objects.filter(team=self.team, date=manual_duty.date).count(),
+            1,
+        )
+
+    def test_nurse_team_gets_one_23_hour_shift_every_day(self):
+        nurse_team = Team.objects.create(
+            name="Медсёстры",
+            schedule_rules=Team.ScheduleRules.NURSES,
+        )
+        nurse_month = ScheduleMonth.objects.create(
+            team=nurse_team,
+            year=2026,
+            month=1,
+            main_employee_hours=300,
+        )
+        nurse_shift = ShiftType.objects.create(
+            team=nurse_team,
+            name="Суточная смена",
+            hours=23,
+            day_type=ShiftType.DayType.WEEKDAY,
+        )
+        nurses = [
+            User.objects.create_user(
+                username=f"nurse-{number}",
+                password="test-password",
+                full_name=f"Медсестра {number}",
+            )
+            for number in range(1, 5)
+        ]
+        TeamMembership.objects.bulk_create(
+            [TeamMembership(team=nurse_team, user=nurse) for nurse in nurses]
+        )
+
+        ScheduleGenerator(nurse_month).generate()
+
+        duties = Duty.objects.filter(team=nurse_team).select_related("shift_type")
+        self.assertEqual(duties.count(), 31)
+        for day in range(1, 32):
+            duty = duties.get(date=date(2026, 1, day))
+            self.assertEqual(duty.shift_type, nurse_shift)
+            self.assertEqual(duty.shift_type.hours, 23)
+
+    def test_nurse_team_rejects_non_23_hour_shift_configuration(self):
+        nurse_team = Team.objects.create(
+            name="Медсёстры без суточной будней",
+            schedule_rules=Team.ScheduleRules.NURSES,
+        )
+        nurse_month = ScheduleMonth.objects.create(
+            team=nurse_team,
+            year=2026,
+            month=1,
+            main_employee_hours=300,
+        )
+        ShiftType.objects.create(
+            team=nurse_team,
+            name="Короткая будняя",
+            hours=11,
+            day_type=ShiftType.DayType.WEEKDAY,
+        )
+        with self.assertRaisesMessage(
+            ScheduleGenerationError,
+            "создайте хотя бы одну 23-часовую смену",
+        ):
+            ScheduleGenerator(nurse_month).load_data()
+
     def test_respects_unavailable_date(self):
         unavailable_day = date(2026, 1, 5)
         DutyDatePreference.objects.create(
@@ -112,6 +202,33 @@ class ScheduleGeneratorTests(TestCase):
 
         self.assertFalse(
             Duty.objects.filter(user=self.users[0], date=unavailable_day).exists()
+        )
+
+    def test_repeated_generation_preserves_and_accounts_for_manual_duty(self):
+        manual_date = date(2026, 1, 5)
+        manual_duty = Duty.objects.create(
+            team=self.team,
+            user=self.users[0],
+            date=manual_date,
+            shift_type=self.weekday_shift,
+            generated=False,
+        )
+
+        ScheduleGenerator(self.schedule_month).generate()
+        ScheduleGenerator(self.schedule_month).generate()
+
+        manual_duty.refresh_from_db()
+        self.assertFalse(manual_duty.generated)
+        self.assertEqual(
+            Duty.objects.filter(team=self.team, date=manual_date).count(),
+            1,
+        )
+        self.assertLessEqual(
+            sum(
+                duty.hours
+                for duty in Duty.objects.filter(user=self.users[0]).select_related("shift_type")
+            ),
+            self.schedule_month.main_employee_hours,
         )
 
     def test_weekday_holiday_uses_weekend_shift_rules(self):
@@ -135,6 +252,32 @@ class ScheduleGeneratorTests(TestCase):
         )
         self.assertContains(response, "Праздник (как выходной)")
         self.assertContains(response, "holiday-cell")
+
+    def test_overnight_shift_on_last_day_counts_only_hours_inside_month(self):
+        generator = ScheduleGenerator(self.schedule_month)
+
+        generator.generate()
+
+        last_day_duty = Duty.objects.select_related("shift_type").get(
+            date=date(2026, 1, 31)
+        )
+        self.assertEqual(last_day_duty.shift_type, self.weekend_shift)
+        self.assertEqual(last_day_duty.hours, Decimal("14.5"))
+        regular_overnight_duty = Duty.objects.select_related("shift_type").filter(
+            shift_type=self.weekend_shift,
+            date__lt=date(2026, 1, 31),
+        ).first()
+        self.assertEqual(regular_overnight_duty.hours, Decimal("23"))
+
+        for user in self.users:
+            expected_units = sum(
+                duty.hour_units
+                for duty in Duty.objects.filter(user=user).select_related("shift_type")
+            )
+            self.assertEqual(
+                generator.solver.Value(generator.worked_hour_units[user.id]),
+                expected_units,
+            )
 
     def test_regeneration_replaces_previous_automatic_schedule(self):
         ScheduleGenerator(self.schedule_month).generate()
@@ -359,7 +502,8 @@ class ScheduleGeneratorTests(TestCase):
         with ZipFile(BytesIO(response.content)) as workbook:
             sheet = workbook.read("xl/worksheets/sheet1.xml").decode("utf-8")
         self.assertIn("Сотрудник", sheet)
-        self.assertIn("совм", sheet)
+        self.assertIn("Январь", sheet)
+        self.assertIn("<t>Sum</t>", sheet)
 
     def test_employee_can_save_preference_from_calendar(self):
         self.client.force_login(self.users[0])
@@ -491,7 +635,7 @@ class ScheduleGeneratorTests(TestCase):
             f"{reverse('month_schedule')}?year=2026&month=1"
         )
         self.assertContains(configured_response, "Создать график")
-        self.assertContains(configured_response, "Смены")
+        self.assertContains(configured_response, "Типы смен")
 
         empty_response = self.client.get(
             f"{reverse('month_schedule')}?year=2026&month=2"
@@ -621,6 +765,11 @@ class ScheduleGeneratorTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.team.name)
         self.assertNotContains(response, other_team.name)
+        self.assertContains(response, "Месяцы графика")
+        self.assertContains(response, "Коллектив")
+        self.assertContains(response, "Год")
+        self.assertContains(response, "Месяц")
+        self.assertContains(response, "Норма часов основного сотрудника")
 
     def test_manager_can_configure_holidays_inside_schedule_month(self):
         manager = self.make_manager("holiday-manager", "Заведующий праздниками")
@@ -636,6 +785,40 @@ class ScheduleGeneratorTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Праздничные дни")
         self.assertContains(response, "holidays-0-date")
+
+    def test_manager_can_edit_assignment_and_make_it_manual(self):
+        ScheduleGenerator(self.schedule_month).generate()
+        duty = Duty.objects.filter(generated=True).first()
+        manager = self.make_manager("duty-manager", "Заведующий сменами")
+        self.client.force_login(manager)
+
+        response = self.client.post(
+            reverse("admin:work_schedule_duty_change", args=[duty.id]),
+            {
+                "team": self.team.id,
+                "user": duty.user_id,
+                "date": duty.date.isoformat(),
+                "shift_type": duty.shift_type_id,
+                "_save": "Сохранить",
+            },
+        )
+
+        self.assertRedirects(response, reverse("admin:work_schedule_duty_changelist"))
+        duty.refresh_from_db()
+        self.assertFalse(duty.generated)
+
+        month_response = self.client.get(
+            reverse("month_schedule"),
+            {"team": self.team.id, "year": 2026, "month": 1},
+        )
+        self.assertContains(month_response, "Редактировать назначения")
+        self.assertContains(month_response, "Смена задана вручную")
+        self.assertContains(month_response, "manual-duty-cell")
+        self.assertContains(
+            month_response,
+            reverse("admin:work_schedule_duty_change", args=[duty.id]),
+        )
+        self.assertContains(month_response, reverse("admin:work_schedule_duty_add"))
 
     def test_employee_registers_only_in_invited_team(self):
         other_team = Team.objects.create(name="Коллектив по приглашению")
@@ -853,7 +1036,61 @@ class ScheduleGeneratorTests(TestCase):
 
         with ZipFile(BytesIO(response.content)) as workbook:
             sheet = workbook.read("xl/worksheets/sheet1.xml").decode("utf-8")
-        self.assertIn("Отпуск", sheet)
+        self.assertIn("<t>От</t>", sheet)
+
+    def test_export_matches_department_month_layout(self):
+        Duty.objects.create(
+            team=self.team,
+            user=self.users[0],
+            date=date(2026, 1, 1),
+            shift_type=self.weekday_shift,
+            generated=False,
+        )
+        DutyDatePreference.objects.create(
+            month=self.schedule_month,
+            user=self.users[0],
+            date=date(2026, 1, 2),
+            status=DutyDatePreference.Status.UNAVAILABLE,
+        )
+
+        response = self.client.get(
+            reverse("export_month_schedule"),
+            {"team": self.team.id, "year": 2026, "month": 1},
+        )
+
+        with ZipFile(BytesIO(response.content)) as workbook:
+            sheet = workbook.read("xl/worksheets/sheet1.xml").decode("utf-8")
+            workbook_xml = workbook.read("xl/workbook.xml").decode("utf-8")
+            styles = workbook.read("xl/styles.xml").decode("utf-8")
+        self.assertIn('name="Январь"', workbook_xml)
+        self.assertIn('<mergeCell ref="B2:AI2"/>', sheet)
+        self.assertIn("<t>Sum</t>", sheet)
+        self.assertIn("<t>Чт</t>", sheet)
+        self.assertIn("<t>Пт</t>", sheet)
+        self.assertIn("<t>-</t>", sheet)
+        self.assertIn("SUM(C5:AG5)", sheet)
+        self.assertIn('orientation="landscape"', sheet)
+        self.assertIn('rgb="FF72FCE9"', styles)
+        self.assertIn('rgb="FF88F94E"', styles)
+        self.assertIn('rgb="FFE2D9F3"', styles)
+
+    def test_export_keeps_half_hour_total_for_last_day_overnight_shift(self):
+        Duty.objects.create(
+            team=self.team,
+            user=self.users[0],
+            date=date(2026, 1, 31),
+            shift_type=self.weekend_shift,
+            generated=False,
+        )
+
+        response = self.client.get(
+            reverse("export_month_schedule"),
+            {"team": self.team.id, "year": 2026, "month": 1},
+        )
+
+        with ZipFile(BytesIO(response.content)) as workbook:
+            sheet = workbook.read("xl/worksheets/sheet1.xml").decode("utf-8")
+        self.assertIn("<v>14.5</v>", sheet)
 
     def test_manager_cannot_open_another_team_vacations(self):
         other_team = Team.objects.create(name="Чужие отпуска")

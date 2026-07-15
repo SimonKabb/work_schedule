@@ -3,6 +3,7 @@
 import calendar
 import uuid
 from datetime import date, timedelta
+from decimal import Decimal
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
 from xml.sax.saxutils import escape
@@ -404,6 +405,7 @@ def _schedule_data(year, month, team):
                 {
                     "duty": duty,
                     "absence": absences_map.get((user.id, day)),
+                    "date": date(year, month, day),
                     "is_holiday": day_info["is_holiday"],
                     "is_weekend": day_info["is_weekend"],
                     "preference_status": preferences_map.get((user.id, day)),
@@ -454,59 +456,224 @@ def month_schedule(request):
     return render(request, "work_schedule/month.html", context)
 
 
-def _xlsx_response(rows, days, year, month):
-    table = [["Сотрудник", "Тип", *[str(day["number"]) for day in days], "Часы"]]
-    for row in rows:
-        employee_type = "осн" if row["user"].employee_type == User.EmployeeType.MAIN else "совм"
-        table.append([
-            row["user"].full_name,
-            employee_type,
-            *[
-                (
-                    cell["absence"].get_absence_type_display()
-                    if cell["absence"]
-                    else cell["duty"].shift_type.name if cell["duty"] else ""
-                )
-                for cell in row["cells"]
-            ],
-            row["total_hours"],
-        ])
+def _xlsx_response(rows, days, year, month, schedule_month):
+    """Build a compact printable schedule matching the department Excel template."""
+    weekday_names = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+    absence_labels = {
+        EmployeeAbsence.Type.VACATION: "От",
+        EmployeeAbsence.Type.SICK_LEAVE: "Бл",
+        EmployeeAbsence.Type.TRAINING: "Об",
+    }
 
-    def cell_xml(value, row_number, column_number):
+    def column_name(number):
         letters = ""
-        number = column_number
         while number:
             number, remainder = divmod(number - 1, 26)
             letters = chr(65 + remainder) + letters
-        reference = f"{letters}{row_number}"
-        if isinstance(value, int):
-            return f'<c r="{reference}" s="1"><v>{value}</v></c>'
-        return f'<c r="{reference}" t="inlineStr" s="1"><is><t>{escape(str(value))}</t></is></c>'
+        return letters
 
-    sheet_rows = "".join(
-        f'<row r="{row_number}">' + "".join(
-            cell_xml(value, row_number, column_number)
-            for column_number, value in enumerate(row, 1)
-        ) + "</row>"
-        for row_number, row in enumerate(table, 1)
+    def numeric_text(value):
+        if isinstance(value, Decimal):
+            return format(value, "f").rstrip("0").rstrip(".") or "0"
+        return str(value)
+
+    def cell(reference, value=None, style=0):
+        if value is None or value == "":
+            return f'<c r="{reference}" s="{style}"/>'
+        if isinstance(value, (int, float, Decimal)):
+            return f'<c r="{reference}" s="{style}"><v>{numeric_text(value)}</v></c>'
+        return (
+            f'<c r="{reference}" s="{style}" t="inlineStr">'
+            f'<is><t>{escape(str(value))}</t></is></c>'
+        )
+
+    def formula_cell(reference, formula, cached_value, style):
+        return (
+            f'<c r="{reference}" s="{style}"><f>{escape(formula)}</f>'
+            f'<v>{numeric_text(cached_value)}</v></c>'
+        )
+
+    first_day_column = 3
+    last_day_column = first_day_column + len(days) - 1
+    sum_column = last_day_column + 1
+    norm_column = sum_column + 1
+    last_day_letter = column_name(last_day_column)
+    sum_letter = column_name(sum_column)
+    norm_letter = column_name(norm_column)
+    last_data_row = 4 + len(rows)
+    bottom_row = last_data_row + 1
+
+    row_xml = ['<row r="1" ht="16" customHeight="1"/>']
+    title_cells = [cell("B2", MONTH_NAMES[month - 1], 1)]
+    title_cells.extend(
+        cell(f"{column_name(column)}2", None, 1)
+        for column in range(3, norm_column + 1)
     )
+    row_xml.append(
+        f'<row r="2" ht="26" customHeight="1">{"".join(title_cells)}</row>'
+    )
+
+    header_cells = [cell("B3", None, 2)]
+    date_cells = [cell("B4", None, 2)]
+    for index, day in enumerate(days, first_day_column):
+        current_date = date(year, month, day["number"])
+        column = column_name(index)
+        header_cells.append(cell(f"{column}3", weekday_names[current_date.weekday()], 3))
+        date_cells.append(cell(f"{column}4", day["number"], 7 if day["is_weekend"] else 6))
+    header_cells.append(cell(f"{sum_letter}3", "Sum", 4))
+    header_cells.append(
+        cell(
+            f"{norm_letter}3",
+            schedule_month.main_employee_hours if schedule_month else None,
+            5,
+        )
+    )
+    date_cells.extend((cell(f"{sum_letter}4", None, 4), cell(f"{norm_letter}4", None, 12)))
+    row_xml.append(f'<row r="3" ht="20" customHeight="1">{"".join(header_cells)}</row>')
+    row_xml.append(f'<row r="4" ht="20" customHeight="1">{"".join(date_cells)}</row>')
+
+    for row_number, row in enumerate(rows, 5):
+        cells = [cell(f"B{row_number}", row["user"].full_name, 8)]
+        for column_number, (day, schedule_cell) in enumerate(
+            zip(days, row["cells"]),
+            first_day_column,
+        ):
+            style = 10 if day["is_weekend"] else 9
+            value = None
+            if schedule_cell["absence"]:
+                value = absence_labels.get(
+                    schedule_cell["absence"].absence_type,
+                    schedule_cell["absence"].get_absence_type_display(),
+                )
+            elif schedule_cell["duty"]:
+                value = schedule_cell["duty"].hours
+                if not schedule_cell["duty"].generated:
+                    style = 13
+            elif schedule_cell["preference_status"] == DutyDatePreference.Status.UNAVAILABLE:
+                value = "-"
+            cells.append(cell(f"{column_name(column_number)}{row_number}", value, style))
+        cells.append(
+            formula_cell(
+                f"{sum_letter}{row_number}",
+                f"SUM(C{row_number}:{last_day_letter}{row_number})",
+                row["total_hours"],
+                11,
+            )
+        )
+        cells.append(cell(f"{norm_letter}{row_number}", None, 12))
+        row_xml.append(
+            f'<row r="{row_number}" ht="20" customHeight="1">{"".join(cells)}</row>'
+        )
+
+    bottom_cells = [cell(f"B{bottom_row}", None, 8)]
+    bottom_cells.extend(
+        cell(
+            f"{column_name(column_number)}{bottom_row}",
+            None,
+            10 if day["is_weekend"] else 9,
+        )
+        for column_number, day in enumerate(days, first_day_column)
+    )
+    bottom_cells.extend(
+        (cell(f"{sum_letter}{bottom_row}", None, 11), cell(f"{norm_letter}{bottom_row}", None, 12))
+    )
+    row_xml.append(
+        f'<row r="{bottom_row}" ht="12" customHeight="1">{"".join(bottom_cells)}</row>'
+    )
+
     sheet = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-        '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
-        '<cols><col min="1" max="1" width="28" customWidth="1"/><col min="2" max="2" width="8" customWidth="1"/>'
-        '<col min="3" max="40" width="13" customWidth="1"/></cols>'
-        f'<sheetData>{sheet_rows}</sheetData></worksheet>'
+        f'<dimension ref="A1:{norm_letter}{bottom_row}"/>'
+        '<sheetViews><sheetView workbookViewId="0" showGridLines="0"/></sheetViews>'
+        '<sheetFormatPr defaultRowHeight="20"/>'
+        '<cols><col min="1" max="1" width="1.5" customWidth="1"/>'
+        '<col min="2" max="2" width="18" customWidth="1"/>'
+        f'<col min="3" max="{last_day_column}" width="4" customWidth="1"/>'
+        f'<col min="{sum_column}" max="{sum_column}" width="6" customWidth="1"/>'
+        f'<col min="{norm_column}" max="{norm_column}" width="6" customWidth="1"/></cols>'
+        f'<sheetData>{"".join(row_xml)}</sheetData>'
+        f'<mergeCells count="1"><mergeCell ref="B2:{norm_letter}2"/></mergeCells>'
+        '<pageMargins left="0.5" right="0.5" top="0.5" bottom="0.5" header="0.25" footer="0.25"/>'
+        '<pageSetup fitToHeight="1" fitToWidth="1" orientation="landscape" pageOrder="downThenOver"/>'
+        '<headerFooter><oddFooter>&amp;CСтраница &amp;P</oddFooter></headerFooter>'
+        '</worksheet>'
     )
+
+    styles = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font>'
+        '<font><b/><sz val="11"/><name val="Calibri"/></font>'
+        '<font><sz val="15"/><name val="Calibri"/></font></fonts>'
+        '<fills count="8"><fill><patternFill patternType="none"/></fill>'
+        '<fill><patternFill patternType="gray125"/></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FFDDDDDD"/><bgColor indexed="64"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FFBDC0BF"/><bgColor indexed="64"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FF72FCE9"/><bgColor indexed="64"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FF88F94E"/><bgColor indexed="64"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FFDBDBDB"/><bgColor indexed="64"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FFE2D9F3"/><bgColor indexed="64"/></patternFill></fill></fills>'
+        '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>'
+        '<border><left style="thin"><color rgb="FFA5A5A5"/></left>'
+        '<right style="thin"><color rgb="FFA5A5A5"/></right>'
+        '<top style="thin"><color rgb="FFA5A5A5"/></top>'
+        '<bottom style="thin"><color rgb="FFA5A5A5"/></bottom><diagonal/></border></borders>'
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+        '<cellXfs count="14">'
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+        '<xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="3" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="4" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="5" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        '<xf numFmtId="0" fontId="0" fillId="2" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        '<xf numFmtId="0" fontId="0" fillId="6" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>'
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        '<xf numFmtId="0" fontId="0" fillId="2" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        '<xf numFmtId="0" fontId="0" fillId="4" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        '<xf numFmtId="0" fontId="0" fillId="7" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+        '</cellXfs><cellStyles count="1"><cellStyle name="Обычный" xfId="0" builtinId="0"/></cellStyles>'
+        '</styleSheet>'
+    )
+
+    sheet_name = escape(MONTH_NAMES[month - 1], {'"': "&quot;"})
     output = BytesIO()
     with ZipFile(output, "w", ZIP_DEFLATED) as archive:
-        archive.writestr("[Content_Types].xml", '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>')
-        archive.writestr("_rels/.rels", '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
-        archive.writestr("xl/workbook.xml", '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="График" sheetId="1" r:id="rId1"/></sheets></workbook>')
-        archive.writestr("xl/_rels/workbook.xml.rels", '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
-        archive.writestr("xl/styles.xml", '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs></styleSheet>')
+        archive.writestr(
+            "[Content_Types].xml",
+            '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>',
+        )
+        archive.writestr(
+            "_rels/.rels",
+            '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+        )
+        archive.writestr(
+            "xl/workbook.xml",
+            '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f'<sheets><sheet name="{sheet_name}" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        )
+        archive.writestr(
+            "xl/_rels/workbook.xml.rels",
+            '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+            '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+        )
+        archive.writestr("xl/styles.xml", styles)
         archive.writestr("xl/worksheets/sheet1.xml", sheet)
-    response = HttpResponse(output.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    response = HttpResponse(
+        output.getvalue(),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
     response["Content-Disposition"] = f'attachment; filename="schedule-{year:04d}-{month:02d}.xlsx"'
     return response
 
@@ -516,7 +683,13 @@ def export_month_schedule(request):
     year, month = _selected_period(request)
     team, _teams = _selected_team(request)
     context = _schedule_data(year, month, team)
-    return _xlsx_response(context["rows"], context["days"], year, month)
+    return _xlsx_response(
+        context["rows"],
+        context["days"],
+        year,
+        month,
+        context["schedule_month"],
+    )
 
 
 def _preference_user(request, schedule_month, user_id):
@@ -702,18 +875,29 @@ def generate_schedule(request, month_id):
         )
 
 
+    permitted_shifts = ShiftType.objects.filter(
+        team=month.team,
+        use_in_generation=True,
+    )
+    if month.team.schedule_rules == Team.ScheduleRules.NURSES:
+        permitted_shifts = permitted_shifts.filter(hours=23)
+
+    weekday_shifts = permitted_shifts.filter(day_type=ShiftType.DayType.WEEKDAY)
+    weekend_shifts = permitted_shifts.filter(day_type=ShiftType.DayType.WEEKEND)
+    if month.team.schedule_rules == Team.ScheduleRules.NURSES:
+        weekday_shifts = weekday_shifts or permitted_shifts
+        weekend_shifts = weekend_shifts or permitted_shifts
+
     return render(
         request,
         "work_schedule/generate_schedule.html",
         {
             "month": month,
-            "weekday_shifts": ShiftType.objects.filter(
-                team=month.team,
-                day_type=ShiftType.DayType.WEEKDAY
-            ),
-            "weekend_shifts": ShiftType.objects.filter(
-                team=month.team,
-                day_type=ShiftType.DayType.WEEKEND
+            "weekday_shifts": weekday_shifts,
+            "weekend_shifts": weekend_shifts,
+            "nurse_shifts": permitted_shifts,
+            "uses_nurse_rules": (
+                month.team.schedule_rules == Team.ScheduleRules.NURSES
             ),
         }
     )

@@ -57,8 +57,8 @@ class UserAdmin(DjangoUserAdmin):
 
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
-    list_display = ("name", "is_active")
-    list_filter = ("is_active",)
+    list_display = ("name", "schedule_rules", "is_active")
+    list_filter = ("schedule_rules", "is_active")
     search_fields = ("name",)
 
     def has_module_permission(self, request):
@@ -261,8 +261,20 @@ class ScheduleMonthAdmin(TeamScopedAdminMixin, admin.ModelAdmin):
     ordering = ("team", "-year", "-month")
     fieldsets = (
         ("Месяц", {"fields": ("team", "year", "month", "main_employee_hours")}),
-        ("Усиленные дни", {"fields": ("increased_staff_weekdays", "increased_staff_count")}),
-        ("Совместители", {"fields": ("part_time_allowed_weekdays", "part_time_hours_percent")}),
+        (
+            "Усиленные дни",
+            {
+                "fields": ("increased_staff_weekdays", "increased_staff_count"),
+                "description": "Применяется только к коллективам с правилами для врачей.",
+            },
+        ),
+        (
+            "Совместители",
+            {
+                "fields": ("part_time_allowed_weekdays", "part_time_hours_percent"),
+                "description": "Ограничение дней применяется только к правилам для врачей.",
+            },
+        ),
     )
 
 
@@ -275,22 +287,54 @@ class PartTimeWorkloadAdmin(TeamScopedAdminMixin, admin.ModelAdmin):
 
 @admin.register(ShiftType)
 class ShiftTypeAdmin(TeamScopedAdminMixin, admin.ModelAdmin):
-    list_display = ("name", "team", "hours", "day_type")
-    list_filter = ("team", "day_type")
-    fields = ("team", "name", "hours", "day_type")
+    list_display = ("name", "team", "hours", "day_type", "use_in_generation")
+    list_filter = ("team", "day_type", "use_in_generation")
+    fields = ("team", "name", "hours", "day_type", "use_in_generation")
+
+
+class DutyAdminForm(forms.ModelForm):
+    class Meta:
+        model = Duty
+        fields = ("team", "user", "date", "shift_type")
+
+    def clean(self):
+        cleaned_data = super().clean()
+        team = cleaned_data.get("team")
+        user = cleaned_data.get("user")
+        shift_type = cleaned_data.get("shift_type")
+        if team and user and not TeamMembership.objects.filter(
+            team=team,
+            user=user,
+            participates_in_schedule=True,
+        ).exists():
+            self.add_error("user", "Сотрудник не участвует в графике этого коллектива.")
+        if team and shift_type and shift_type.team_id != team.id:
+            self.add_error("shift_type", "Тип смены относится к другому коллективу.")
+        if (
+            team
+            and shift_type
+            and team.schedule_rules == Team.ScheduleRules.NURSES
+            and shift_type.hours != 23
+        ):
+            self.add_error(
+                "shift_type",
+                "Для коллектива медсестёр можно назначить только 23-часовую смену.",
+            )
+        return cleaned_data
 
 
 @admin.register(Duty)
 class DutyAdmin(TeamScopedAdminMixin, admin.ModelAdmin):
+    form = DutyAdminForm
     list_display = ("date", "team", "user", "shift_type", "generated")
     list_filter = ("team", "date", "shift_type", "generated")
     search_fields = ("user__full_name",)
+    date_hierarchy = "date"
+    ordering = ("-date", "user__full_name")
+    fields = ("team", "user", "date", "shift_type", "generated")
+    readonly_fields = ("generated",)
 
-    def has_add_permission(self, request):
-        return request.user.is_superuser
-
-    def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser
-
-    def has_delete_permission(self, request, obj=None):
-        return request.user.is_superuser
+    def save_model(self, request, obj, form, change):
+        # Any assignment saved by a person becomes fixed for future generations.
+        obj.generated = False
+        super().save_model(request, obj, form, change)
