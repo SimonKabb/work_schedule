@@ -41,6 +41,7 @@ class ScheduleGenerator:
         self.target_hours = {}
         # OR-Tools works with integers, so durations are stored as half-hour units.
         self.target_hour_units = {}
+        self.overtime_allowance_units = 0
         self.manual_duties = []
         self.manual_duty_dates = set()
         self.manual_count_by_date = {}
@@ -116,6 +117,10 @@ class ScheduleGenerator:
             shift.id: shift
             for shift in [*self.weekday_shifts, *self.weekend_shifts]
         }
+        self.overtime_allowance_units = max(
+            shift.hours * 2
+            for shift in self.shift_map.values()
+        )
 
         preferences = DutyDatePreference.objects.filter(
             month=self.schedule_month
@@ -209,7 +214,7 @@ class ScheduleGenerator:
             self.target_hour_units[user.id] = self.target_hours[user.id] * 2
 
             self.worked_hour_units_upper[user.id] = max(
-                self.target_hour_units[user.id],
+                self.target_hour_units[user.id] + self.overtime_allowance_units,
                 self.manual_hour_units.get(user.id, 0),
             )
     
@@ -451,7 +456,8 @@ class ScheduleGenerator:
                     v * h
                     for v, h in zip(vars, coeffs)
                 ) <= max(
-                    self.target_hour_units[user.id] - self.manual_hour_units.get(user.id, 0),
+                    self.worked_hour_units_upper[user.id]
+                    - self.manual_hour_units.get(user.id, 0),
                     0,
                 )
             )
@@ -609,21 +615,37 @@ class ScheduleGenerator:
             best_consecutive_score = self.solver.Value(consecutive_score)
             self.model.Add(consecutive_score == best_consecutive_score)
 
-            squared_hours = []
+            squared_deviations = []
             for user in self.users:
                 maximum = self.worked_hour_units_upper[user.id]
+                target = self.target_hour_units[user.id]
+                maximum_deviation = max(target, maximum - target)
+                deviation = self.model.NewIntVar(
+                    -target,
+                    maximum - target,
+                    f"hours_deviation_{user.id}",
+                )
+                absolute_deviation = self.model.NewIntVar(
+                    0,
+                    maximum_deviation,
+                    f"hours_absolute_deviation_{user.id}",
+                )
+                self.model.Add(
+                    deviation == self.worked_hour_units[user.id] - target
+                )
+                self.model.AddAbsEquality(absolute_deviation, deviation)
                 square = self.model.NewIntVar(
                     0,
-                    maximum * maximum,
-                    f"hours_square_{user.id}",
+                    maximum_deviation * maximum_deviation,
+                    f"hours_deviation_square_{user.id}",
                 )
                 self.model.AddMultiplicationEquality(
                     square,
-                    [self.worked_hour_units[user.id], self.worked_hour_units[user.id]],
+                    [absolute_deviation, absolute_deviation],
                 )
-                squared_hours.append(square)
+                squared_deviations.append(square)
 
-            self.model.Minimize(sum(squared_hours))
+            self.model.Minimize(sum(squared_deviations))
             status = self.solver.Solve(self.model)
             if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                 raise ScheduleGenerationError("Невозможно равномерно распределить смены.")

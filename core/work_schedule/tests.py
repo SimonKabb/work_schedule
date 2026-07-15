@@ -166,6 +166,72 @@ class ScheduleGeneratorTests(TestCase):
             self.assertEqual(duty.shift_type, nurse_shift)
             self.assertEqual(duty.shift_type.hours, 23)
 
+    def test_nurse_team_may_exceed_norm_by_one_shift_to_cover_month(self):
+        nurse_team = Team.objects.create(
+            name="Суточный коллектив с переработкой",
+            schedule_rules=Team.ScheduleRules.NURSES,
+        )
+        nurse_month = ScheduleMonth.objects.create(
+            team=nurse_team,
+            year=2026,
+            month=9,
+            main_employee_hours=132,
+        )
+        ShiftType.objects.create(
+            team=nurse_team,
+            name="Суточная смена",
+            hours=23,
+            day_type=ShiftType.DayType.WEEKDAY,
+        )
+        nurses = [
+            User.objects.create_user(
+                username=f"overtime-nurse-{number}",
+                password="test-password",
+                full_name=f"Суточный сотрудник {number}",
+            )
+            for number in range(1, 6)
+        ]
+        TeamMembership.objects.bulk_create(
+            [TeamMembership(team=nurse_team, user=nurse) for nurse in nurses]
+        )
+
+        ScheduleGenerator(nurse_month).generate()
+
+        totals = sorted(
+            sum(
+                duty.hours
+                for duty in Duty.objects.filter(
+                    team=nurse_team,
+                    user=nurse,
+                ).select_related("shift_type")
+            )
+            for nurse in nurses
+        )
+        self.assertEqual(Duty.objects.filter(team=nurse_team).count(), 30)
+        self.assertEqual(totals, [Decimal("129.5"), *[Decimal("138")] * 4])
+        self.assertTrue(any(total > nurse_month.main_employee_hours for total in totals))
+        self.assertTrue(
+            all(total <= nurse_month.main_employee_hours + 23 for total in totals)
+        )
+
+    def test_doctor_team_may_exceed_norm_by_at_most_one_shift(self):
+        self.schedule_month.main_employee_hours = 175
+        self.schedule_month.save(update_fields=["main_employee_hours"])
+
+        ScheduleGenerator(self.schedule_month).generate()
+
+        totals = [
+            sum(
+                duty.hours
+                for duty in Duty.objects.filter(user=user).select_related("shift_type")
+            )
+            for user in self.users
+        ]
+        self.assertTrue(any(total > self.schedule_month.main_employee_hours for total in totals))
+        self.assertTrue(
+            all(total <= self.schedule_month.main_employee_hours + 23 for total in totals)
+        )
+
     def test_nurse_team_rejects_non_23_hour_shift_configuration(self):
         nurse_team = Team.objects.create(
             name="Медсёстры без суточной будней",
